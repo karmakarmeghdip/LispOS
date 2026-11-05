@@ -39,7 +39,8 @@
    #:+ms-nodev+
    #:+ms-noexec+
    #:+ms-bind+
-   #:+ms-move+))
+   #:+ms-move+
+   #:+mnt-detach+))
 
 (defpackage :lispos.drm
   (:use :cl)

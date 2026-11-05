@@ -7,23 +7,15 @@
   (format t "[INIT] Setting up non-FHS filesystem hierarchy...~%")
   (lispos.paths:ensure-system-hierarchy)
 
-  ;; Check if /dev was auto-mounted by kernel
-  (if (probe-file "/dev")
-      (progn
-        ;; Try moving mount to /System/Kernel/Devices
-        (multiple-value-bind (moved-p errno)
-            (lispos.sys:mount "/dev" lispos.paths:+dev-root+ "" :flags lispos.sys:+ms-move+)
-          (if moved-p
-              (format t "[INIT] Successfully moved /dev to ~A~%" lispos.paths:+dev-root+)
-              (progn
-                ;; Otherwise mount devtmpfs directly
-                (format t "[INIT] Mounting devtmpfs at ~A (move errno ~A)...~%" lispos.paths:+dev-root+ errno)
-                (lispos.sys:mount "devtmpfs" lispos.paths:+dev-root+ "devtmpfs"))))
-        ;; Remove empty /dev stub if possible
-        (ignore-errors (sb-posix:rmdir "/dev")))
-      (progn
-        (format t "[INIT] Mounting devtmpfs at ~A...~%" lispos.paths:+dev-root+)
-        (lispos.sys:mount "devtmpfs" lispos.paths:+dev-root+ "devtmpfs")))
+  ;; Mount devtmpfs directly at /System/Kernel/Devices
+  (format t "[INIT] Mounting devtmpfs at ~A...~%" lispos.paths:+dev-root+)
+  (unless (lispos.sys:mount "devtmpfs" lispos.paths:+dev-root+ "devtmpfs")
+    (format t "[INIT] Warning: devtmpfs mount failed (errno ~A)~%" (sb-alien:get-errno)))
+
+  ;; Clean up kernel-created /dev and /root stubs so / has only non-FHS folders
+  (ignore-errors (lispos.sys:umount "/dev" lispos.sys:+mnt-detach+))
+  (ignore-errors (sb-posix:rmdir "/dev"))
+  (ignore-errors (sb-posix:rmdir "/root"))
 
   ;; Mount procfs
   (format t "[INIT] Mounting procfs at ~A...~%" lispos.paths:+proc-root+)

@@ -10,6 +10,9 @@
 (defconstant +ms-bind+ 4096)
 (defconstant +ms-move+ 8192)
 
+;; Umount flags
+(defconstant +mnt-detach+ 2)
+
 ;; Network ioctl constants
 (defconstant +siocsifflags+ #x8914)
 (defconstant +siocgifflags+ #x8913)

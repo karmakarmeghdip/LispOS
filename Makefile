@@ -43,6 +43,8 @@ build/initramfs.cpio.gz: build/Init
 	patchelf --set-interpreter /System/Libraries/ld-linux-x86-64.so.2 \
 	         --set-rpath /System/Libraries \
 	         build/initramfs/System/Core/Init
+	@echo "==> Restoring SBCL core trailer after patchelf..."
+	@python3 -c "trailer = open('build/Init', 'rb').read()[-32:]; open('build/initramfs/System/Core/Init', 'ab').write(trailer)"
 	@echo "==> Copying OS source tree for live introspection..."
 	@cp -r src lispos.asd build/initramfs/System/Source/LispOS/
 	@echo "==> Packing build/initramfs.cpio.gz..."
@@ -50,15 +52,29 @@ build/initramfs.cpio.gz: build/Init
 	@echo "==> Initramfs generated successfully: $$(du -h build/initramfs.cpio.gz | cut -f1)"
 
 run: initramfs
-	@echo "==> Booting LispOS in QEMU with kernel $(KERNEL)..."
+	@echo "==> Booting LispOS in QEMU (windowed) with kernel $(KERNEL)..."
 	$(QEMU) \
 	  -enable-kvm \
+	  -cpu host \
 	  -m 1024M \
 	  -kernel $(KERNEL) \
 	  -initrd build/initramfs.cpio.gz \
-	  -append "console=ttyS0 init=/System/Core/Init quiet" \
+	  -append "console=ttyS0 rdinit=/System/Core/Init quiet" \
 	  -vga std \
 	  -serial mon:stdio \
+	  -nic user,hostfwd=tcp::4005-:4005
+
+run-stdio: initramfs
+	@echo "==> Booting LispOS in QEMU (terminal stdio) with kernel $(KERNEL)..."
+	$(QEMU) \
+	  -enable-kvm \
+	  -cpu host \
+	  -m 1024M \
+	  -kernel $(KERNEL) \
+	  -initrd build/initramfs.cpio.gz \
+	  -append "console=ttyS0 rdinit=/System/Core/Init quiet" \
+	  -display none \
+	  -serial stdio \
 	  -nic user,hostfwd=tcp::4005-:4005
 
 clean:
