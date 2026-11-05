@@ -71,11 +71,18 @@ make initramfs
 Creates the `/System`, `/Applications`, `/Library`, `/Users` structure, copies dependencies into `/System/Libraries/`, runs `patchelf` on `Init` to request `/System/Libraries/ld-linux-x86-64.so.2` with RPATH `/System/Libraries`, and packs `build/initramfs.cpio.gz` (~15MB).
 
 ### 3. Launch with QEMU
-```bash
-make run
-```
-Boots using the host kernel (`/lib/modules/$(uname -r)/vmlinuz`) with parameters:
-`console=ttyS0 init=/System/Core/Init quiet`
+
+- **Terminal stdio mode (No GUI required)**:
+  ```bash
+  make run-stdio
+  ```
+  Runs headlessly directly in your current terminal. Exit anytime with `(lispos.sys:poweroff)` or `Ctrl-a x`.
+
+- **Graphical window mode**:
+  ```bash
+  make run
+  ```
+  Boots with KMS display output on the host window while keeping the serial REPL connected to stdio.
 
 ---
 
