@@ -1,0 +1,95 @@
+# LispOS: Monolithic Common Lisp Linux Userland
+
+A minimal, self-contained Linux operating system userland written entirely in Common Lisp (SBCL) that boots directly as `/System/Core/Init` (PID 1) inside a Linux initramfs over a standard Linux kernel (`vmlinuz`).
+
+## Key Architectural Principles
+
+- **No GNU Userland & No Legacy FHS**: Eliminates `/bin`, `/usr`, `/etc`, `/var`, `/lib64`, and `/sbin`. Employs a clean, human-readable directory hierarchy inspired by macOS and Lisp Machines.
+- **Monolithic Single-Image Userland**: PID 1 is a single compiled SBCL image (`save-lisp-and-die :executable t`) containing the init supervisor, DRM/KMS dumb-buffer framebuffer driver, evdev input loop, live serial console REPL, and remote SLY/Swank server.
+- **Crash Immunity (PID 1 Guard)**: Main supervisor loop and worker threads are wrapped in `handler-bind` / `restart-case` blocks so unhandled conditions never cause PID 1 to exit (avoiding kernel panics).
+- **Source Introspection**: Logical pathnames (`SYS:SRC;**;*.*.*` and `LISPOS:**;*.*.*`) mapped to `/System/Source/` so `M-.` (`xref-find-definitions`) resolves down to the lowest level of the OS.
+
+---
+
+## Directory Hierarchy (Non-FHS Root)
+
+```
+/
+├── System/
+│   ├── Core/
+│   │   └── Init                  # Monolithic SBCL PID 1 executable image
+│   ├── Libraries/                # Shared C libraries (.so) & ELF dynamic linker
+│   ├── Source/
+│   │   ├── LispOS/               # Live OS Lisp source files (.lisp)
+│   │   └── SBCL/                 # SBCL compiler/runtime source for M-. introspection
+│   ├── Configuration/            # System-wide declarative S-expression configs (.sexp)
+│   ├── Runtime/                  # Ephemeral runtime sockets & state (mounted tmpfs)
+│   └── Kernel/                   # Kernel pseudo-filesystems (hidden away from /)
+│       ├── Processes/            # procfs mount (replaces /proc)
+│       ├── Hardware/             # sysfs mount (replaces /sys)
+│       └── Devices/              # devtmpfs mount (replaces /dev)
+├── Applications/                 # Self-contained application bundles
+├── Library/                      # Shared packages, fonts, and themes
+│   └── Fonts/
+└── Users/
+    └── Admin/                    # Default user home directory
+```
+
+---
+
+## Host Prerequisites & Setup
+
+### Arch Linux / CachyOS Packages
+
+To run QEMU with display output:
+```bash
+sudo pacman -S qemu-desktop
+```
+*(Or `sudo pacman -S qemu-system-x86 qemu-ui-gtk qemu-ui-sdl`)*
+
+Installed host tools used for building:
+- `sbcl` (with core compression)
+- `patchelf`
+- `cpio`
+- `gzip`
+- `make`
+
+---
+
+## Building and Running
+
+### 1. Build the Monolithic SBCL Executable Image
+```bash
+make image
+```
+Produces `build/Init` (~13MB compressed).
+
+### 2. Pack the Non-FHS initramfs
+```bash
+make initramfs
+```
+Creates the `/System`, `/Applications`, `/Library`, `/Users` structure, copies dependencies into `/System/Libraries/`, runs `patchelf` on `Init` to request `/System/Libraries/ld-linux-x86-64.so.2` with RPATH `/System/Libraries`, and packs `build/initramfs.cpio.gz` (~15MB).
+
+### 3. Launch with QEMU
+```bash
+make run
+```
+Boots using the host kernel (`/lib/modules/$(uname -r)/vmlinuz`) with parameters:
+`console=ttyS0 init=/System/Core/Init quiet`
+
+---
+
+## Live REPL & SLY Development
+
+1. **Serial Console REPL**:
+   Upon boot, QEMU's terminal provides a live Common Lisp REPL:
+   ```lisp
+   COMMON-LISP-USER> (directory #P"/*")
+   (#P"/Applications/" #P"/Library/" #P"/System/" #P"/Users/")
+
+   COMMON-LISP-USER> (lispos.drm:draw-rect 100 100 300 200 #xFFFF5500)
+   ```
+2. **SLY Remote Connection (Port 4005)**:
+   In Emacs on the host:
+   `M-x sly-connect RET 127.0.0.1 RET 4005`
+   Recompile functions, update graphics, or inspect threads live without restarting the VM!
