@@ -30,6 +30,11 @@
   (maxevents :int)
   (timeout :int))
 
+(cffi:defcfun ("read" %c-read) :long
+  (fd :int)
+  (buf :pointer)
+  (count :size))
+
 (defvar *input-thread* nil)
 (defvar *running-input-loop* nil)
 (defvar *key-hooks* nil)
@@ -69,46 +74,50 @@
 
 (defun input-loop ()
   "Background epoll event loop reading evdev devices."
-  (let ((devices (find-input-event-devices)))
-    (if (null devices)
-        (format t "[INPUT] No evdev event devices found to monitor.~%")
-        (format t "[INPUT] Monitoring devices: ~A~%" devices)))
-  (let ((epfd (%epoll-create1 0)))
-    (when (< epfd 0)
-      (format t "[INPUT] epoll_create1 failed: errno ~A~%" (sb-alien:get-errno))
-      (return-from input-loop nil))
-    (let ((open-fds '()))
-      (unwind-protect
-           (progn
-             (cffi:with-foreign-pointer (ev 12)
-               (setf (cffi:mem-ref ev :uint32) +epollin+)
-               (dolist (dev (find-input-event-devices))
-                 (let ((fd (ignore-errors
-                            (sb-posix:open dev (logior sb-posix:o-rdonly sb-posix:o-nonblock)))))
-                   (when (and fd (>= fd 0))
-                     (push fd open-fds)
-                     (setf (cffi:mem-ref (cffi:inc-pointer ev 4) :uint64) (logand #xFFFFFFFF fd))
-                     (%epoll-ctl epfd +epoll-ctl-add+ fd ev)))))
-             (cffi:with-foreign-pointer (events-buf (* 12 16))
-               (cffi:with-foreign-pointer (event-frame 24)
-                 (loop while *running-input-loop* do
-                   (let ((n (%epoll-wait epfd events-buf 16 100)))
-                     (when (> n 0)
-                       (dotimes (i n)
-                         (let* ((ev-ptr (cffi:inc-pointer events-buf (* i 12)))
-                                (fd (logand (cffi:mem-ref (cffi:inc-pointer ev-ptr 4) :uint64) #xFFFFFFFF)))
-                           ;; Read all available 24-byte input_event packets from fd
-                           (loop
-                             (let ((bytes (sb-posix:read fd event-frame 24)))
-                               (if (or (null bytes) (/= bytes 24))
-                                   (return)
-                                   (let ((type (cffi:mem-ref (cffi:inc-pointer event-frame 16) :uint16))
-                                         (code (cffi:mem-ref (cffi:inc-pointer event-frame 18) :uint16))
-                                         (val  (cffi:mem-ref (cffi:inc-pointer event-frame 20) :int32)))
-                                     (handle-input-event type code val)))))))))))))
-        (dolist (fd open-fds)
-          (ignore-errors (sb-posix:close fd)))
-        (ignore-errors (sb-posix:close epfd))))))
+  (handler-case
+      (let ((devices (find-input-event-devices)))
+        (if (null devices)
+            (format t "[INPUT] No evdev event devices found to monitor.~%")
+            (format t "[INPUT] Monitoring devices: ~A~%" devices))
+        (let ((epfd (%epoll-create1 0)))
+          (when (< epfd 0)
+            (format t "[INPUT] epoll_create1 failed: errno ~A~%" (sb-alien:get-errno))
+            (return-from input-loop nil))
+          (let ((open-fds '()))
+            (unwind-protect
+                 (progn
+                   (cffi:with-foreign-pointer (ev 12)
+                     (setf (cffi:mem-ref ev :uint32) +epollin+)
+                     (dolist (dev devices)
+                       (let ((fd (ignore-errors
+                                  (sb-posix:open dev (logior sb-posix:o-rdonly sb-posix:o-nonblock)))))
+                         (when (and fd (>= fd 0))
+                           (push fd open-fds)
+                           (setf (cffi:mem-ref (cffi:inc-pointer ev 4) :uint64) (logand #xFFFFFFFF fd))
+                           (%epoll-ctl epfd +epoll-ctl-add+ fd ev)))))
+                   (cffi:with-foreign-pointer (events-buf (* 12 16))
+                     (cffi:with-foreign-pointer (event-frame 24)
+                       (loop while *running-input-loop* do
+                         (let ((n (%epoll-wait epfd events-buf 16 100)))
+                           (when (> n 0)
+                             (dotimes (i n)
+                               (let* ((ev-ptr (cffi:inc-pointer events-buf (* i 12)))
+                                      (fd (logand (cffi:mem-ref (cffi:inc-pointer ev-ptr 4) :uint64) #xFFFFFFFF)))
+                                 ;; Read all available 24-byte input_event packets from non-blocking fd
+                                 (loop
+                                   (let ((bytes (%c-read fd event-frame 24)))
+                                     (if (<= bytes 0)
+                                         (return)
+                                         (when (= bytes 24)
+                                           (let ((type (cffi:mem-ref (cffi:inc-pointer event-frame 16) :uint16))
+                                                 (code (cffi:mem-ref (cffi:inc-pointer event-frame 18) :uint16))
+                                                 (val  (cffi:mem-ref (cffi:inc-pointer event-frame 20) :int32)))
+                                             (handle-input-event type code val))))))))))))))
+              (dolist (fd open-fds)
+                (ignore-errors (sb-posix:close fd)))
+              (ignore-errors (sb-posix:close epfd))))))
+    (error (c)
+      (format t "[INPUT] Warning: Input worker caught condition: ~A~%" c))))
 
 (defun start-input-loop ()
   "Start the input worker thread."

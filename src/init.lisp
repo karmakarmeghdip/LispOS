@@ -55,6 +55,17 @@
 
 (defun boot-os ()
   "Top-level PID 1 entry point for LispOS."
+  ;; 0. Global PID 1 Crash Guard: Trap any unhandled error in ANY thread so SBCL never exits
+  (setf sb-ext:*invoke-debugger-hook*
+        (lambda (condition hook)
+          (declare (ignore hook))
+          (format *error-output* "~&[CRASH GUARD] Caught condition: ~A in thread ~A~%"
+                  condition (ignore-errors (sb-thread:thread-name sb-thread:*current-thread*)))
+          (finish-output *error-output*)
+          (if (eq sb-thread:*current-thread* (sb-thread:main-thread))
+              (invoke-restart 'recover)
+              (sb-thread:abort-thread))))
+
   (format t "~%======================================================~%")
   (format t " >>> Booting LispOS (Common Lisp Monolithic Userland) <<<~%")
   (format t "======================================================~%~%")
@@ -67,6 +78,11 @@
 
   ;; 3. Mount Pseudo-Filesystems (Non-FHS)
   (ignore-errors (mount-filesystems))
+
+  ;; 3.5. Load Hardware Kernel Modules
+  (format t "[INIT] Loading hardware kernel modules...~%")
+  (lispos.sys:load-kernel-module "/System/Libraries/Modules/bochs.ko")
+  (lispos.sys:load-kernel-module "/System/Libraries/Modules/e1000.ko")
 
   ;; 4. Bring up Networking
   (format t "[INIT] Initializing network interfaces...~%")

@@ -39,6 +39,18 @@ build/initramfs.cpio.gz: build/Init
 	@cp -L /usr/lib/libm.so.6 build/initramfs/System/Libraries/libm.so.6
 	@cp -L /usr/lib/libzstd.so.1 build/initramfs/System/Libraries/libzstd.so.1
 	@cp -L /usr/lib/libdrm.so.2 build/initramfs/System/Libraries/libdrm.so.2
+	@echo "==> Copying hardware kernel modules into /System/Libraries/Modules/..."
+	@mkdir -p build/initramfs/System/Libraries/Modules
+	@if [ -f /lib/modules/$$(uname -r)/kernel/drivers/gpu/drm/tiny/bochs.ko.zst ]; then \
+	   zstd -d -c /lib/modules/$$(uname -r)/kernel/drivers/gpu/drm/tiny/bochs.ko.zst > build/initramfs/System/Libraries/Modules/bochs.ko; \
+	 elif [ -f /lib/modules/$$(uname -r)/kernel/drivers/gpu/drm/tiny/bochs.ko ]; then \
+	   cp /lib/modules/$$(uname -r)/kernel/drivers/gpu/drm/tiny/bochs.ko build/initramfs/System/Libraries/Modules/bochs.ko; \
+	 fi
+	@if [ -f /lib/modules/$$(uname -r)/kernel/drivers/net/ethernet/intel/e1000/e1000.ko.zst ]; then \
+	   zstd -d -c /lib/modules/$$(uname -r)/kernel/drivers/net/ethernet/intel/e1000/e1000.ko.zst > build/initramfs/System/Libraries/Modules/e1000.ko; \
+	 elif [ -f /lib/modules/$$(uname -r)/kernel/drivers/net/ethernet/intel/e1000/e1000.ko ]; then \
+	   cp /lib/modules/$$(uname -r)/kernel/drivers/net/ethernet/intel/e1000/e1000.ko build/initramfs/System/Libraries/Modules/e1000.ko; \
+	 fi
 	@echo "==> Patching ELF dynamic linker and rpath..."
 	patchelf --set-interpreter /System/Libraries/ld-linux-x86-64.so.2 \
 	         --set-rpath /System/Libraries \

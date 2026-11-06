@@ -34,6 +34,7 @@
    #:sync-filesystem
    #:poweroff
    #:reboot
+   #:load-kernel-module
    #:+ms-rdonly+
    #:+ms-nosuid+
    #:+ms-nodev+

@@ -64,6 +64,22 @@
 (cffi:defcfun ("close" %c-close) :int
   (fd :int))
 
+(defconstant +sys-finit-module+ 313)
+
+(defun load-kernel-module (path &optional (params ""))
+  "Load a kernel module (.ko) using finit_module syscall."
+  (when (probe-file path)
+    (let ((fd (sb-posix:open (namestring path) sb-posix:o-rdonly)))
+      (when (>= fd 0)
+        (unwind-protect
+             (cffi:with-foreign-string (c-params params)
+               (let ((ret (cffi:foreign-funcall "syscall" :long +sys-finit-module+ :int fd :string c-params :int 0 :int)))
+                 (if (zerop ret)
+                     (format t "[SYS] Loaded module ~A~%" (file-namestring path))
+                     (format t "[SYS] Module ~A load note: errno ~A~%"
+                             (file-namestring path) (sb-alien:get-errno)))))
+          (sb-posix:close fd))))))
+
 (defun mount (source target fstype &key (flags 0) (data nil))
   "Mount a filesystem at target. Returns t on success, nil and errno on failure."
   (let ((data-ptr (if data (cffi:foreign-string-alloc data) (cffi:null-pointer))))
