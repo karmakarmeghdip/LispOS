@@ -3,3 +3,6 @@
 *.fasl
 *~
 *.core
+skills/
+
+__pycache__/

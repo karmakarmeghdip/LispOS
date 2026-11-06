@@ -3,7 +3,7 @@
 KERNEL ?= $(shell if [ -f /lib/modules/$$(uname -r)/vmlinuz ]; then echo /lib/modules/$$(uname -r)/vmlinuz; elif [ -f /boot/vmlinuz-linux ]; then echo /boot/vmlinuz-linux; else echo vmlinuz; fi)
 QEMU ?= qemu-system-x86_64
 
-.PHONY: all clean image initramfs run
+.PHONY: all clean image initramfs run run-stdio start stop status eval screenshot repl log
 
 all: initramfs
 
@@ -89,5 +89,28 @@ run-stdio: initramfs
 	  -serial stdio \
 	  -nic user,hostfwd=tcp::4005-:4005
 
+# Harness Automation Targets
+start: initramfs
+	@./tools/harness.py start --kernel $(KERNEL)
+
+stop:
+	@./tools/harness.py stop
+
+status:
+	@./tools/harness.py status
+
+eval:
+	@./tools/harness.py eval "$$EXPR"
+
+screenshot:
+	@./tools/harness.py screenshot $(OUTPUT)
+
+repl:
+	@./tools/harness.py repl
+
+log:
+	@./tools/harness.py log
+
 clean:
 	rm -rf build
+

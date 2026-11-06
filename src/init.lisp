@@ -51,7 +51,9 @@
         (lispos.drm:draw-string (+ cx 20) (+ cy 100) "Hierarchy: /System  /Applications  /Library  /Users" #xFFF9E2AF nil 2)
         (lispos.drm:draw-string (+ cx 20) (+ cy 140) "SLY / Swank Remote Server: port 4005" #xFFF38BA8 nil 2)
         (lispos.drm:draw-string (+ cx 20) (+ cy 180) "TTY REPL: active on serial console (ttyS0)" #xFFBAC2DE nil 2)
-        (lispos.drm:draw-string (+ cx 20) (+ cy 240) "Evaluate (lispos.drm:draw-rect ...) in REPL to draw!" #xFFCBA6F7 nil 2)))))
+        (lispos.drm:draw-string (+ cx 20) (+ cy 240) "Evaluate (lispos.drm:draw-rect ...) in REPL to draw!" #xFFCBA6F7 nil 2)))
+    (lispos.drm:flush-screen)))
+
 
 (defun boot-os ()
   "Top-level PID 1 entry point for LispOS."

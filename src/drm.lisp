@@ -65,6 +65,13 @@
   (count :int)
   (mode-ptr :pointer))
 
+(cffi:defcfun ("drmModeDirtyFB" %drm-mode-dirty-fb) :int
+  (fd :int)
+  (buffer-id :uint32)
+  (clips :pointer)
+  (num-clips :uint32))
+
+
 (defstruct drm-state
   fd
   crtc-id
@@ -209,6 +216,13 @@
   "Create 32-bit ARGB pixel with explicit alpha."
   (logior (ash (logand a #xFF) 24) (ash (logand r #xFF) 16) (ash (logand g #xFF) 8) (logand b #xFF)))
 
+(defun flush-screen ()
+  "Notify DRM KMS driver that framebuffer contents are dirty and should be transferred to display plane."
+  (when *drm-state*
+    (let ((fd (drm-state-fd *drm-state*))
+          (fb-id (drm-state-fb-id *drm-state*)))
+      (%drm-mode-dirty-fb fd fb-id (cffi:null-pointer) 0))))
+
 (defun clear-screen (&optional (color #xFF0A0E14))
   "Clear screen to color (default dark slate)."
   (when *drm-state*
@@ -219,7 +233,9 @@
       (dotimes (y height)
         (let ((row-offset (* y pitch)))
           (dotimes (x width)
-            (setf (sb-sys:sap-ref-32 sap (+ row-offset (* x 4))) color)))))))
+            (setf (sb-sys:sap-ref-32 sap (+ row-offset (* x 4))) color))))
+      (flush-screen))))
+
 
 (defun draw-rect (x y w h color)
   "Draw a filled rectangle at (x, y) with dimensions (w, h) and ARGB color."

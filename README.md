@@ -100,3 +100,39 @@ Creates the `/System`, `/Applications`, `/Library`, `/Users` structure, copies d
    In Emacs on the host:
    `M-x sly-connect RET 127.0.0.1 RET 4005`
    Recompile functions, update graphics, or inspect threads live without restarting the VM!
+
+---
+
+## Development & Verification Harness
+
+A complete CLI harness is provided via `tools/harness.py` and `Makefile` for headless daemon execution, remote evaluation, and display capture:
+
+| Command | Description |
+|---|---|
+| `make start` | Launch LispOS as background QEMU daemon (auto-builds initramfs if needed) |
+| `make status` | Check PID, QMP socket, SLY port, and serial log status |
+| `make eval EXPR='...'` | Safely evaluate any Common Lisp expression over SLY/Slynk (port 4005) |
+| `make screenshot [OUTPUT=path.png]` | Auto-flush framebuffer & capture display to PNG via QMP screendump |
+| `make repl` | Interactive CLI REPL connected directly to running LispOS |
+| `make log` | View the live serial console log (`build/serial.log`) |
+| `make stop` | Gracefully shut down the background QEMU daemon |
+
+### Example Workflow
+```bash
+# 1. Start daemon
+make start
+
+# 2. Draw a window live on the running framebuffer
+./tools/harness.py eval '(progn
+  (lispos.drm:draw-rect 300 200 680 360 #xFF24273A)
+  (lispos.drm:draw-rect 300 200 680 40 #xFF8AADF4)
+  (lispos.drm:draw-string 320 212 "LispOS Interactive Window" #xFF181926 nil 2)
+  (lispos.drm:flush-screen))'
+
+# 3. Capture screen to PNG
+make screenshot
+
+# 4. Stop when finished
+make stop
+```
+

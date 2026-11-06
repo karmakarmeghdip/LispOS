@@ -61,11 +61,13 @@
    #:init-drm
    #:close-drm
    #:clear-screen
+   #:flush-screen
    #:draw-rect
    #:draw-string
    #:draw-char
    #:rgb
    #:argb))
+
 
 (defpackage :lispos.input
   (:use :cl)
