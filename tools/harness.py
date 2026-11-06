@@ -29,6 +29,7 @@ DEFAULT_SCREENSHOT = BUILD_DIR / "screenshot.png"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_SLYNK_PORT = 4005
+DEFAULT_VNC_PORT = 5900
 
 
 def find_default_kernel():
@@ -104,7 +105,10 @@ def start_qemu(kernel=None, headless=True, mem="1024M", qemu_bin="qemu-system-x8
     ]
 
     if headless:
-        cmd.extend(["-display", "none"])
+        cmd.extend(["-display", "none", "-vnc", "127.0.0.1:0"])
+    else:
+        cmd.extend(["-vnc", "127.0.0.1:0"])
+
 
     print(f"[LispOS] Launching QEMU daemon (Kernel: {kernel}, Mem: {mem}, Headless: {headless})...")
     res = subprocess.run(cmd, cwd=PROJECT_ROOT)
@@ -217,7 +221,18 @@ def status_qemu():
     except Exception:
         slynk_ok = False
     print(f"  - SLYNK REPL ({DEFAULT_HOST}:{DEFAULT_SLYNK_PORT}): {'LISTENING' if slynk_ok else 'NOT REACHABLE'}")
+
+    # Check VNC port
+    vnc_ok = False
+    try:
+        with socket.create_connection((DEFAULT_HOST, DEFAULT_VNC_PORT), timeout=1.0):
+            vnc_ok = True
+    except Exception:
+        vnc_ok = False
+    print(f"  - VNC Display ({DEFAULT_HOST}:{DEFAULT_VNC_PORT}): {'LISTENING' if vnc_ok else 'NOT REACHABLE'}")
+
     print(f"  - Serial Log: {SERIAL_LOG} ({SERIAL_LOG.stat().st_size if SERIAL_LOG.exists() else 0} bytes)")
+
 
     return 0
 
