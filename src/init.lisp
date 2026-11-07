@@ -97,14 +97,17 @@
   (ignore-errors
    (lispos.repl:start-slynk-server 4005 "0.0.0.0"))
 
-  ;; 6. Initialize DRM/KMS Framebuffer
-  (format t "[INIT] Initializing KMS Graphics Display...~%")
+  ;; 6. Initialize DRM/KMS Framebuffer & Interactive Graphical Shell
+  (format t "[INIT] Initializing KMS Graphics Display, Fonts, and Shell...~%")
   (handler-case
       (progn
         (lispos.drm:init-drm)
-        (draw-boot-splash))
+        (lispos.display:init-display)
+        (ignore-errors (lispos.font:init-font))
+        (lispos.terminal:init-terminal)
+        (lispos.terminal:start-terminal-thread))
     (error (c)
-      (format t "[INIT] DRM initialization note: ~A~%" c)))
+      (format t "[INIT] Graphics/Terminal initialization note: ~A~%" c)))
 
   ;; 7. Start evdev Input Subsystem
   (format t "[INIT] Starting evdev input listener...~%")

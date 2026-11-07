@@ -3,7 +3,7 @@
 KERNEL ?= $(shell if [ -f /lib/modules/$$(uname -r)/vmlinuz ]; then echo /lib/modules/$$(uname -r)/vmlinuz; elif [ -f /boot/vmlinuz-linux ]; then echo /boot/vmlinuz-linux; else echo vmlinuz; fi)
 QEMU ?= qemu-system-x86_64
 
-.PHONY: all clean image initramfs run run-stdio start stop status eval screenshot repl log
+.PHONY: all clean image initramfs run run-stdio start stop status eval screenshot repl log test
 
 all: initramfs
 
@@ -39,6 +39,17 @@ build/initramfs.cpio.gz: build/Init
 	@cp -L /usr/lib/libm.so.6 build/initramfs/System/Libraries/libm.so.6
 	@cp -L /usr/lib/libzstd.so.1 build/initramfs/System/Libraries/libzstd.so.1
 	@cp -L /usr/lib/libdrm.so.2 build/initramfs/System/Libraries/libdrm.so.2
+	@ln -sf libdrm.so.2 build/initramfs/System/Libraries/libdrm.so
+	@cp -L /usr/lib/libfreetype.so.6 build/initramfs/System/Libraries/libfreetype.so.6
+	@ln -sf libfreetype.so.6 build/initramfs/System/Libraries/libfreetype.so
+	@cp -L /usr/lib/libpng16.so.16 build/initramfs/System/Libraries/libpng16.so.16
+	@cp -L /usr/lib/libz.so.1 build/initramfs/System/Libraries/libz.so.1
+	@cp -L /usr/lib/libbz2.so.1.0 build/initramfs/System/Libraries/libbz2.so.1.0
+	@cp -L /usr/lib/libbrotlidec.so.1 build/initramfs/System/Libraries/libbrotlidec.so.1
+	@cp -L /usr/lib/libbrotlicommon.so.1 build/initramfs/System/Libraries/libbrotlicommon.so.1
+	@echo "==> Copying Cascadia Code Nerd Font into /Library/Fonts/..."
+	@mkdir -p build/initramfs/Library/Fonts
+	@cp -L /usr/share/fonts/TTF/CascadiaCodeNF.ttf build/initramfs/Library/Fonts/CascadiaCodeNF.ttf
 	@echo "==> Copying hardware kernel modules into /System/Libraries/Modules/..."
 	@mkdir -p build/initramfs/System/Libraries/Modules
 	@if [ -f /lib/modules/$$(uname -r)/kernel/drivers/gpu/drm/tiny/bochs.ko.zst ]; then \
@@ -52,6 +63,16 @@ build/initramfs.cpio.gz: build/Init
 	   cp /lib/modules/$$(uname -r)/kernel/drivers/net/ethernet/intel/e1000/e1000.ko build/initramfs/System/Libraries/Modules/e1000.ko; \
 	 fi
 	@echo "==> Patching ELF dynamic linker and rpath..."
+	@for f in build/initramfs/System/Libraries/libfreetype*.so* \
+	          build/initramfs/System/Libraries/libpng*.so* \
+	          build/initramfs/System/Libraries/libz*.so* \
+	          build/initramfs/System/Libraries/libbz2*.so* \
+	          build/initramfs/System/Libraries/libbrotli*.so* \
+	          build/initramfs/System/Libraries/libdrm*.so*; do \
+	   if [ -f "$$f" ] && [ ! -L "$$f" ]; then \
+	     patchelf --set-rpath /System/Libraries "$$f" 2>/dev/null || true; \
+	   fi; \
+	 done
 	patchelf --set-interpreter /System/Libraries/ld-linux-x86-64.so.2 \
 	         --set-rpath /System/Libraries \
 	         build/initramfs/System/Core/Init
@@ -110,6 +131,15 @@ repl:
 
 log:
 	@./tools/harness.py log
+
+test:
+	@echo "==> Running LispOS Headless REPL Shell Test Suite..."
+	sbcl --non-interactive \
+	     --eval '(require :asdf)' \
+	     --eval '(let ((quicklisp-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))) (when (probe-file quicklisp-setup) (load quicklisp-setup)))' \
+	     --eval '(pushnew (truename ".") asdf:*central-registry* :test #'\''equal)' \
+	     --eval '(ql:quickload :lispos)' \
+	     --load tests/test-shell.lisp
 
 clean:
 	rm -rf build
