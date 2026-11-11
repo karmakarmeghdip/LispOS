@@ -11,8 +11,91 @@
 (defparameter +default-prompt+ "λ > "
   "Standard prompt prefix for the LispOS shell.")
 
-(defvar *default-prompt* +default-prompt+
-  "Configurable default prompt string.")
+(defvar *prompt-fn* nil
+  "Custom prompt hook function (lambda (engine) ...).")
+
+(defvar *default-prompt* :dynamic
+  "Configurable default prompt string, :dynamic, or prompt function.")
+
+(defun get-cwd-namestring ()
+  "Return current working directory as a clean pathname string."
+  (let ((raw (or (ignore-errors (namestring (truename *default-pathname-defaults*)))
+                 (ignore-errors (namestring *default-pathname-defaults*))
+                 "/")))
+    (if (and (> (length raw) 1) (char= (char raw (1- (length raw))) #\/))
+        (subseq raw 0 (1- (length raw)))
+        raw)))
+
+(defun default-lispos-prompt (&optional engine)
+  "Render standard LispOS prompt showing CWD abbreviated with ~ for /Users/Admin."
+  (declare (ignore engine))
+  (let* ((cwd (get-cwd-namestring))
+         (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
+         (clean-home (if (and admin-home (> (length admin-home) 1)
+                              (char= (char admin-home (1- (length admin-home))) #\/))
+                         (subseq admin-home 0 (1- (length admin-home)))
+                         admin-home))
+         (display-cwd (cond
+                        ((string= cwd clean-home) "~")
+                        ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
+                         (concatenate 'string "~" (subseq cwd (length clean-home))))
+                        (t cwd))))
+    (format nil "λ [~A] > " display-cwd)))
+
+(defun resolve-path (path-str)
+  "Resolve PATH-STR relative to *default-pathname-defaults*, expanding ~ to Admin home."
+  (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\Return) (or path-str "")))
+         (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
+         (home-dir (or admin-home "/Users/Admin/")))
+    (cond
+      ((or (zerop (length clean-str)) (string= clean-str "~"))
+       (pathname home-dir))
+      ((and (>= (length clean-str) 2) (string= (subseq clean-str 0 2) "~/"))
+       (pathname (concatenate 'string home-dir (subseq clean-str 2))))
+      ((char= (char clean-str 0) #\/)
+       (pathname clean-str))
+      (t
+       (merge-pathnames clean-str *default-pathname-defaults*)))))
+
+(defvar *shell-commands* (make-hash-table :test #'equalp)
+  "Registry mapping shell command names to handler functions.")
+
+(defmacro define-shell-command (name (engine &rest args) &body body)
+  "Register a shell command NAME. The handler receives ENGINE and ARGS (list of strings)."
+  (let ((cmd-str (string-downcase (string name))))
+    `(progn
+       (setf (gethash ,cmd-str *shell-commands*)
+             (lambda (,engine ,@args)
+               ,@body))
+       ',name)))
+
+(defun get-shell-command (cmd-name)
+  "Look up shell command handler for CMD-NAME."
+  (gethash (string-downcase (string cmd-name)) *shell-commands*))
+
+(defun tokenize-shell-line (line)
+  "Parse command line into token strings, respecting single and double quotes."
+  (let ((tokens '())
+        (current (make-array 16 :element-type 'character :adjustable t :fill-pointer 0))
+        (in-quote nil)
+        (len (length line)))
+    (loop for i from 0 below len do
+      (let ((c (char line i)))
+        (cond
+          ((and (or (char= c #\") (char= c #\'))
+                (null in-quote))
+           (setf in-quote c))
+          ((and in-quote (char= c in-quote))
+           (setf in-quote nil))
+          ((and (null in-quote) (member c '(#\Space #\Tab #\Newline #\Return)))
+           (when (> (length current) 0)
+             (push (copy-seq current) tokens)
+             (setf (fill-pointer current) 0)))
+          (t
+           (vector-push-extend c current)))))
+    (when (> (length current) 0)
+      (push (copy-seq current) tokens))
+    (nreverse tokens)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Engine State Structure
@@ -20,7 +103,7 @@
 
 (defstruct (shell-engine (:constructor %make-shell-engine))
   "State for the interactive REPL shell engine."
-  (prompt +default-prompt+ :type string)
+  (prompt :dynamic)
   (buffer (make-array 64 :element-type 'character :adjustable t :fill-pointer 0)
    :type (vector character))
   (point 0 :type fixnum)
@@ -37,7 +120,7 @@
   (last-error nil)
   (last-status nil :type symbol)) ; :submitted, :incomplete, :empty, :error
 
-(defun make-shell-engine (&key (prompt +default-prompt+)
+(defun make-shell-engine (&key (prompt *default-prompt*)
                                (package (find-package :cl-user))
                                (history-max 500))
   "Create and initialize a new REPL shell engine instance."
@@ -71,7 +154,17 @@
   (shell-engine-point engine))
 
 (defun engine-prompt (engine)
-  (shell-engine-prompt engine))
+  "Return resolved prompt string for ENGINE."
+  (let ((p (shell-engine-prompt engine)))
+    (cond
+      ((functionp p) (funcall p engine))
+      ((eq p :dynamic)
+       (if *prompt-fn*
+           (funcall *prompt-fn* engine)
+           (default-lispos-prompt engine)))
+      ((stringp p) p)
+      (*prompt-fn* (funcall *prompt-fn* engine))
+      (t (default-lispos-prompt engine)))))
 
 (defun (setf engine-prompt) (val engine)
   (setf (shell-engine-prompt engine) val))
@@ -453,7 +546,7 @@ Returns T if fully balanced, NIL otherwise."
       (push (subseq str start len) lines))
     (nreverse lines)))
 
-(defun evaluate-string (engine code-str)
+(defun evaluate-lisp-string (engine code-str)
   "Evaluate Common Lisp expression(s) in CODE-STR.
 Captures *standard-output*, *error-output*, and multiple return values.
 Updates engine state and returns :submitted or :error."
@@ -507,6 +600,106 @@ Updates engine state and returns :submitted or :error."
                 (push (format nil "=> ~S" val) (shell-engine-output-history engine))))
             :submitted)))))
 
+(defun evaluate-shell-line (engine line-str)
+  "Execute command line LINE-STR using shell dispatch (implicit top-level parenthesis)."
+  (let* ((tokens (tokenize-shell-line line-str))
+         (stdout-stream (make-string-output-stream))
+         (stderr-stream (make-string-output-stream))
+         (results nil)
+         (eval-error nil)
+         (*package* (shell-engine-package engine)))
+    (when (null tokens)
+      (setf (shell-engine-last-eval-values engine) nil)
+      (setf (shell-engine-last-stdout engine) "")
+      (setf (shell-engine-last-stderr engine) "")
+      (setf (shell-engine-last-error engine) nil)
+      (setf (shell-engine-last-status engine) :empty)
+      (return-from evaluate-shell-line :empty))
+
+    (let* ((cmd-name (first tokens))
+           (args (rest tokens))
+           (handler (get-shell-command cmd-name)))
+      (handler-case
+          (let ((*standard-output* stdout-stream)
+                (*error-output* stderr-stream))
+            (cond
+              ;; 1. Registered shell builtin
+              (handler
+               (let ((ret (apply handler engine args)))
+                 (when ret
+                   (setf results (if (listp ret) ret (list ret))))))
+
+              ;; 2. Direct Common Lisp function lookup in current package or CL-USER
+              ((let ((sym (find-symbol (string-upcase cmd-name) *package*)))
+                 (and sym (fboundp sym)))
+               (let* ((sym (find-symbol (string-upcase cmd-name) *package*))
+                      (fn (fdefinition sym))
+                      (parsed-args (mapcar (lambda (a)
+                                             (or (ignore-errors (parse-integer a))
+                                                 a))
+                                           args))
+                      (ret (multiple-value-list (apply fn parsed-args))))
+                 (setf results ret)))
+
+              ;; 3. Command not found
+              (t
+               (format stderr-stream
+                       "[SHELL] Command not found: ~A~%Type 'help' for available commands or use '(~A ...)' for Common Lisp evaluation.~%"
+                       cmd-name cmd-name))))
+        (error (c)
+          (setf eval-error c)))
+
+      (let ((stdout-text (get-output-stream-string stdout-stream))
+            (stderr-text (get-output-stream-string stderr-stream)))
+        (setf (shell-engine-last-stdout engine) stdout-text)
+        (setf (shell-engine-last-stderr engine) stderr-text)
+        (setf (shell-engine-last-error engine) eval-error)
+
+        (when (> (length stdout-text) 0)
+          (dolist (line (split-lines stdout-text))
+            (push line (shell-engine-output-history engine))))
+
+        (when (> (length stderr-text) 0)
+          (dolist (line (split-lines stderr-text))
+            (push (if (search "[SHELL]" line)
+                      line
+                      (format nil "[STDERR] ~A" line))
+                  (shell-engine-output-history engine))))
+
+        (if eval-error
+            (let ((err-msg (format nil "[ERROR] ~A" eval-error)))
+              (setf (shell-engine-last-eval-values engine) nil)
+              (setf (shell-engine-last-status engine) :error)
+              (push err-msg (shell-engine-output-history engine))
+              :error)
+            (progn
+              (setf (shell-engine-last-eval-values engine) results)
+              (setf (shell-engine-last-status engine) :submitted)
+              (when results
+                (dolist (val results)
+                  (push (format nil "=> ~S" val) (shell-engine-output-history engine))))
+              :submitted))))))
+
+(defun evaluate-string (engine code-str)
+  "Evaluate Common Lisp expression(s) or shell command(s) in CODE-STR.
+If input begins with '(', ';', or '#', evaluates as pure Common Lisp.
+Otherwise, treats input as a shell command line with implicit parentheses."
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) code-str)))
+    (cond
+      ((zerop (length trimmed))
+       (setf (shell-engine-last-eval-values engine) nil)
+       (setf (shell-engine-last-stdout engine) "")
+       (setf (shell-engine-last-stderr engine) "")
+       (setf (shell-engine-last-error engine) nil)
+       (setf (shell-engine-last-status engine) :empty)
+       :empty)
+      ((or (char= (char trimmed 0) #\()
+           (char= (char trimmed 0) #\;)
+           (char= (char trimmed 0) #\#))
+       (evaluate-lisp-string engine trimmed))
+      (t
+       (evaluate-shell-line engine trimmed)))))
+
 (defun submit-buffer (engine)
   "Submit the current buffer for evaluation:
 - Records prompt line in output history.
@@ -515,7 +708,7 @@ Updates engine state and returns :submitted or :error."
 - Performs captured evaluation."
   (let* ((line (buffer-text engine))
          (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) line))
-         (prompt (shell-engine-prompt engine)))
+         (prompt (engine-prompt engine)))
     ;; 1. Add input line with prompt to output history
     (push (format nil "~A~A" prompt line) (shell-engine-output-history engine))
 

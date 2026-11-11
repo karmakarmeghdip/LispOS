@@ -129,6 +129,83 @@
    #:measure-text
    #:blend-pixel))
 
+(defpackage :lispos.buffer
+  (:use :cl)
+  (:export
+   #:*buffers*
+   #:*current-buffer*
+   #:buffer
+   #:buffer-p
+   #:make-buffer
+   #:buffer-id
+   #:buffer-name
+   #:buffer-mode
+   #:buffer-engine
+   #:buffer-file-path
+   #:buffer-modified-p
+   #:create-buffer
+   #:find-buffer
+   #:kill-buffer
+   #:list-buffers
+   #:buffer-content-lines
+   #:buffer-cursor-position
+   #:buffer-insert-char
+   #:buffer-handle-key))
+
+(defpackage :lispos.picker
+  (:use :cl)
+  (:export
+   #:*active-picker*
+   #:picker
+   #:picker-p
+   #:make-picker
+   #:picker-title
+   #:picker-items
+   #:picker-filter
+   #:picker-selected-index
+   #:picker-on-select
+   #:picker-visible-p
+   #:picker-width
+   #:picker-item-height
+   #:picker-max-visible
+   #:open-picker
+   #:close-picker
+   #:picker-handle-key
+   #:picker-filtered-items
+   #:fuzzy-match-score
+   #:open-buffer-picker
+   #:open-file-picker
+   #:open-command-palette))
+
+(defpackage :lispos.window
+  (:use :cl)
+  (:export
+   #:*root-window*
+   #:*focused-window*
+   #:window
+   #:window-p
+   #:make-window
+   #:window-id
+   #:window-buffer
+   #:window-x
+   #:window-y
+   #:window-width
+   #:window-height
+   #:window-split-type
+   #:window-split-ratio
+   #:window-first-child
+   #:window-second-child
+   #:window-parent
+   #:leaf-window-p
+   #:split-window-horizontally
+   #:split-window-vertically
+   #:close-window
+   #:focus-window
+   #:focus-direction
+   #:all-leaf-windows
+   #:layout-windows
+   #:active-window-modeline-info))
+
 (defpackage :lispos.terminal
   (:use :cl)
   (:export
@@ -141,6 +218,7 @@
    #:terminal-rows
    #:terminal-font
    #:terminal-display
+   #:terminal-active-picker
    #:init-terminal
    #:render-terminal
    #:terminal-handle-key
@@ -152,6 +230,15 @@
   (:use :cl)
   (:export
    #:*default-prompt*
+   #:*prompt-fn*
+   #:default-lispos-prompt
+   #:get-cwd-namestring
+   #:*shell-commands*
+   #:define-shell-command
+   #:get-shell-command
+   #:tokenize-shell-line
+   #:resolve-path
+   #:evaluate-shell-line
    #:shell-engine
    #:shell-engine-p
    #:make-shell-engine
@@ -199,6 +286,15 @@
    #:start-slynk-server
    ;; Re-export shell engine APIs from lispos.shell
    #:*default-prompt*
+   #:*prompt-fn*
+   #:default-lispos-prompt
+   #:get-cwd-namestring
+   #:*shell-commands*
+   #:define-shell-command
+   #:get-shell-command
+   #:tokenize-shell-line
+   #:resolve-path
+   #:evaluate-shell-line
    #:shell-engine
    #:shell-engine-p
    #:make-shell-engine

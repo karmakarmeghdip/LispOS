@@ -87,6 +87,8 @@
 (defconstant +key-pagedown+ 109)
 (defconstant +key-insert+ 110)
 (defconstant +key-delete+ 111)
+(defconstant +key-leftmeta+ 125)
+(defconstant +key-rightmeta+ 126)
 
 (cffi:defcfun ("epoll_create1" %epoll-create1) :int
   (flags :int))
@@ -112,7 +114,7 @@
   (type :key-down)  ; :key-down, :key-up, :pointer
   (key nil)         ; :left, :right, :up, :down, :enter, :backspace, or char
   (char nil)        ; Character if printable, or nil
-  (modifiers nil))  ; List of active modifiers, e.g. (:ctrl :shift)
+  (modifiers nil))  ; List of active modifiers, e.g. (:ctrl :shift :super)
 
 ;; State variables
 (defvar *input-thread* nil)
@@ -127,6 +129,7 @@
 (defvar *modifier-shift* nil)
 (defvar *modifier-ctrl* nil)
 (defvar *modifier-alt* nil)
+(defvar *modifier-super* nil)
 
 ;; Synchronized event queue
 (defvar *event-queue* '())
@@ -145,6 +148,7 @@
 (defun active-modifiers ()
   "Return list of active modifier symbols."
   (let ((mods '()))
+    (when *modifier-super* (push :super mods))
     (when *modifier-ctrl* (push :ctrl mods))
     (when *modifier-alt* (push :alt mods))
     (when *modifier-shift* (push :shift mods))
@@ -251,9 +255,10 @@
        (case code
          ((42 54) (setf *modifier-shift* pressed))
          ((29 97) (setf *modifier-ctrl* pressed))
-         ((56 100) (setf *modifier-alt* pressed)))
-       ;; Only emit key-down events to queue for consumption
-       (when pressed
+         ((56 100) (setf *modifier-alt* pressed))
+         ((125 126) (setf *modifier-super* pressed)))
+       ;; Only emit key-down events to queue for consumption (skip emitting on modifier presses themselves)
+       (when (and pressed (not (member code '(42 54 29 97 56 100 125 126))))
          (multiple-value-bind (sym ch) (scancode->keysym code *modifier-shift*)
            (when sym
              (let ((ev (make-input-event :type :key-down

@@ -38,7 +38,7 @@
 
 (defun test-buffer-basics ()
   (def-test-group "1. Buffer Basics & Cursor Point"
-    (let ((engine (make-shell-engine)))
+    (let ((engine (make-shell-engine :prompt "λ > ")))
       (assert-test (string= (buffer-text engine) "") "Initial buffer is empty")
       (assert-test (= (buffer-point engine) 0) "Initial cursor point is 0")
       (assert-test (string= (engine-prompt engine) "λ > ") "Default prompt is λ > ")
@@ -289,7 +289,7 @@
 (defun test-evaluation-and-output ()
   (def-test-group "9. Evaluation & Output Capture (stdout, stderr, values, errors)"
     ;; 1. Standard single value evaluation
-    (let ((engine (make-shell-engine)))
+    (let ((engine (make-shell-engine :prompt "λ > ")))
       (feed-input engine '("(+ 40 2)" :enter))
       (assert-test (eq (engine-last-status engine) :submitted) "Status is :submitted")
       (assert-test (equal (engine-last-eval-values engine) '(42)) "Evaluates (+ 40 2) to 42")
@@ -339,7 +339,7 @@
                    "Engine immediately recovers and evaluates subsequent input"))
 
     ;; 6. Empty line submission advances prompt without evaluation
-    (let ((engine (make-shell-engine)))
+    (let ((engine (make-shell-engine :prompt "λ > ")))
       (feed-input engine '("" :enter))
       (assert-test (eq (engine-last-status engine) :empty) "Empty line sets status to :empty")
       (assert-test (null (engine-last-eval-values engine)) "No eval values for empty line")
@@ -369,6 +369,132 @@
       (handle-key engine :c-l)
       (assert-test (null (engine-output-history engine)) "C-l clears output history"))))
 
+(defun test-dynamic-prompt ()
+  (def-test-group "11. Dynamic Prompt & CWD Integration"
+    (let ((engine (make-shell-engine)))
+      (assert-test (search "λ [" (engine-prompt engine)) "Default prompt contains λ [")
+      (assert-test (search "] > " (engine-prompt engine)) "Default prompt contains ] > ")
+
+      ;; Simulate cd to /tmp
+      (let ((orig-cwd *default-pathname-defaults*))
+        (unwind-protect
+             (progn
+               (feed-input engine '("cd /tmp" :enter))
+               (assert-test (search "/tmp" (engine-prompt engine)) "Prompt updated with /tmp CWD"))
+          (setf *default-pathname-defaults* orig-cwd)))
+
+      ;; Custom *prompt-fn*
+      (let ((*prompt-fn* (lambda (eng) (declare (ignore eng)) "custom-prompt> ")))
+        (assert-test (string= (engine-prompt engine) "custom-prompt> ") "Custom prompt hook works")))))
+
+(defun test-shell-tokenizer ()
+  (def-test-group "12. Shell Line Tokenizer (Quotes & Flags)"
+    (assert-test (equal (tokenize-shell-line "ls -la /System") '("ls" "-la" "/System"))
+                 "Splits standard tokens")
+    (assert-test (equal (tokenize-shell-line "echo \"Hello, World!\" 123") '("echo" "Hello, World!" "123"))
+                 "Preserves double-quoted string with spaces")
+    (assert-test (equal (tokenize-shell-line "cat 'path with spaces/file.txt'") '("cat" "path with spaces/file.txt"))
+                 "Preserves single-quoted string")
+    (assert-test (equal (tokenize-shell-line "   cd    ..   ") '("cd" ".."))
+                 "Handles multiple spaces and padding")
+    (assert-test (null (tokenize-shell-line "")) "Empty string returns NIL")
+    (assert-test (null (tokenize-shell-line "    ")) "Whitespace returns NIL")))
+
+(defun test-builtin-filesystem-commands ()
+  (def-test-group "13. Built-in Filesystem Commands (ls, cd, pwd, cat, touch, mkdir, rm)"
+    (let ((engine (make-shell-engine :prompt "λ > "))
+          (orig-cwd *default-pathname-defaults*))
+      (unwind-protect
+           (progn
+             ;; pwd
+             (feed-input engine '("pwd" :enter))
+             (assert-test (search (get-cwd-namestring) (engine-last-stdout engine)) "pwd prints current directory")
+
+             ;; mkdir / touch / cat / rm
+             (let ((test-dir (format nil "/tmp/lispos-test-~A" (get-universal-time))))
+               (feed-input engine (list (format nil "mkdir -p ~A" test-dir) :enter))
+               (assert-test (probe-file test-dir) "mkdir creates directory")
+
+               ;; cd into test-dir
+               (feed-input engine (list (format nil "cd ~A" test-dir) :enter))
+               (assert-test (search "lispos-test" (get-cwd-namestring)) "cd changes working directory")
+
+               ;; touch test.txt
+               (feed-input engine '("touch test.txt" :enter))
+               (assert-test (probe-file "test.txt") "touch creates file")
+
+               ;; write content to test.txt and cat it
+               (with-open-file (out "test.txt" :direction :output :if-exists :supersede)
+                 (write-line "Pure Common Lisp Userland" out))
+               (feed-input engine '("cat test.txt" :enter))
+               (assert-test (search "Pure Common Lisp Userland" (engine-last-stdout engine))
+                            "cat reads file contents")
+
+               ;; ls
+               (feed-input engine '("ls" :enter))
+               (assert-test (search "test.txt" (engine-last-stdout engine)) "ls lists test.txt")
+
+               ;; rm
+               (feed-input engine '("rm test.txt" :enter))
+               (assert-test (null (probe-file "test.txt")) "rm deletes file")
+
+               ;; cd back out and cleanup
+               (feed-input engine '("cd /tmp" :enter))
+               (feed-input engine (list (format nil "rm -r ~A" test-dir) :enter))))
+        (setf *default-pathname-defaults* orig-cwd)))))
+
+(defun test-builtin-system-commands ()
+  (def-test-group "14. Built-in System Commands (echo, ps, whoami, history, help)"
+    (let ((engine (make-shell-engine :prompt "λ > ")))
+      ;; echo
+      (feed-input engine '("echo Hello LispOS Userland" :enter))
+      (assert-test (search "Hello LispOS Userland" (engine-last-stdout engine)) "echo outputs text")
+
+      (feed-input engine '("echo -n no-newline" :enter))
+      (assert-test (string= (engine-last-stdout engine) "no-newline") "echo -n suppresses newline")
+
+      ;; whoami
+      (feed-input engine '("whoami" :enter))
+      (assert-test (search "Admin" (engine-last-stdout engine)) "whoami outputs Admin")
+
+      ;; ps
+      (feed-input engine '("ps" :enter))
+      (assert-test (search "main thread" (engine-last-stdout engine)) "ps lists active threads")
+
+      ;; history
+      (feed-input engine '("history" :enter))
+      (assert-test (search "echo" (engine-last-stdout engine)) "history lists executed commands")
+
+      ;; help
+      (feed-input engine '("help" :enter))
+      (assert-test (search "Command Mode" (engine-last-stdout engine)) "help displays command guide"))))
+
+(defun test-dual-mode-evaluation ()
+  (def-test-group "15. Dual-Mode Evaluation (Implicit Shell vs Explicit Lisp)"
+    (let ((engine (make-shell-engine :prompt "λ > ")))
+      ;; 1. Implicit parenthesis shell command
+      (feed-input engine '("echo shell-mode-active" :enter))
+      (assert-test (search "shell-mode-active" (engine-last-stdout engine))
+                   "Shell command without parentheses executes in Command Mode")
+
+      ;; 2. Explicit Lisp form
+      (feed-input engine '("(+ 100 23)" :enter))
+      (assert-test (equal (engine-last-eval-values engine) '(123))
+                   "Parenthesized expression evaluates as Common Lisp")
+
+      ;; 3. Unknown command reporting
+      (feed-input engine '("nonexistent-command-xyz" :enter))
+      (assert-test (search "Command not found: nonexistent-command-xyz" (engine-last-stderr engine))
+                   "Unknown command reports friendly error with help hint")
+
+      ;; 4. Extensibility: define-shell-command
+      (define-shell-command test-greet (eng &optional (name "LispOS"))
+        (declare (ignore eng))
+        (format t "Welcome, ~A!~%" name))
+      (feed-input engine '("test-greet Developer" :enter))
+      (assert-test (search "Welcome, Developer!" (engine-last-stdout engine))
+                   "define-shell-command successfully extends shell with new commands"))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Test Suite Runner
 ;;; ---------------------------------------------------------------------------
@@ -390,6 +516,11 @@
   (test-multiline-unbalanced-enter)
   (test-evaluation-and-output)
   (test-emacs-kill-shortcuts)
+  (test-dynamic-prompt)
+  (test-shell-tokenizer)
+  (test-builtin-filesystem-commands)
+  (test-builtin-system-commands)
+  (test-dual-mode-evaluation)
 
   (format t "~%================================================================~%")
   (format t " Test Results Summary: ~A Passed, ~A Failed.~%"
