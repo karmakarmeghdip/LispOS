@@ -7,8 +7,6 @@
 (defparameter +win-bg+        #xFF1E1E2E) ; Base window background
 (defparameter +win-border+    #xFF313244) ; Split window divider line
 (defparameter +focus-border+  #xFF89B4FA) ; Focused window accent border
-(defparameter +header-bg+      #xFF11111B) ; Mantle / Header bar
-(defparameter +header-fg+      #xFF89B4FA) ; Blue
 (defparameter +modeline-bg+   #xFF181825) ; Unified bottom modeline background
 (defparameter +modeline-fg+   #xFFCDD6F4) ; Unified bottom modeline text
 (defparameter +prompt-lambda+  #xFFA6E3A1) ; Green
@@ -30,7 +28,6 @@
   (font nil)
   (cols 80 :type fixnum)
   (rows 25 :type fixnum)
-  (header-height 0 :type fixnum)
   (modeline-height 28 :type fixnum)
   (running-p nil :type boolean)
   (thread nil)
@@ -49,7 +46,6 @@
          (h (lispos.display:display-height disp))
          (cw (lispos.font:font-char-width fnt))
          (lh (lispos.font:font-line-height fnt))
-         (header-h 0)
          (modeline-h 28)
          (workspace-h (- h modeline-h))
          (cols (max 40 (floor (- w 40) cw)))
@@ -75,7 +71,6 @@
                          :font fnt
                          :cols cols
                          :rows rows
-                         :header-height header-h
                          :modeline-height modeline-h
                          :dirty-p t))
     (render-terminal *terminal*)
@@ -194,7 +189,7 @@
         ;; Draw Cursor if Focused
         (when focused-p
           (case (lispos.buffer:buffer-mode buf)
-            ((:shell :scratch)
+            (:shell
              (let ((eng (lispos.buffer:buffer-engine buf)))
                (when eng
                  (let* ((prompt (lispos.shell:engine-prompt eng))
@@ -307,7 +302,7 @@
     (:vsplit (lispos.window:split-window-vertically))
     (:hsplit (lispos.window:split-window-horizontally))
     (:close-win (lispos.window:close-window))
-    ((:new-shell :new-scratch)
+    (:new-shell
      (let ((buf (lispos.buffer:create-buffer (format nil "*shell-~D*" (1+ (length (lispos.buffer:list-buffers)))) :mode :shell)))
        (when lispos.window:*focused-window*
          (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf))))

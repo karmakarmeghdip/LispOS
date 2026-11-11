@@ -4,9 +4,9 @@
 
 (defstruct buffer
   (id (gensym "BUF-") :type symbol)
-  (name "*scratch*" :type string)
-  (mode :scratch :type keyword)       ; :shell, :scratch, :file, :system
-  (engine nil)                        ; backing engine (e.g. shell-engine or editor state)
+  (name "*shell*" :type string)
+  (mode :shell :type keyword)       ; :shell, :file, :system
+  (engine nil)                      ; backing engine (e.g. shell-engine or editor state)
   (file-path nil :type (or null string))
   (modified-p nil :type boolean)
   (read-only-p nil :type boolean)
@@ -58,7 +58,7 @@
 (defun buffer-content-lines (buf)
   "Return list or vector of text lines to display for BUF."
   (case (buffer-mode buf)
-    ((:shell :scratch)
+    (:shell
      (let ((eng (buffer-engine buf)))
        (if eng
            (let* ((history (lispos.shell:output-history-lines eng))
@@ -73,7 +73,7 @@
 (defun buffer-cursor-position (buf)
   "Return (values row col) of the cursor within the buffer."
   (case (buffer-mode buf)
-    ((:shell :scratch)
+    (:shell
      (let ((eng (buffer-engine buf)))
        (if eng
            (let* ((history-count (length (lispos.shell:output-history-lines eng)))
@@ -87,7 +87,7 @@
 (defun buffer-handle-key (buf key &key (char nil) (modifiers nil))
   "Dispatch key event to buffer's backing engine."
   (case (buffer-mode buf)
-    ((:shell :scratch)
+    (:shell
      (let ((eng (buffer-engine buf)))
        (when eng
          (let ((effective-key
