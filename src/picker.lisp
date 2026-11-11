@@ -177,7 +177,6 @@
                    (make-picker-item :title "Split Window Horizontally" :subtitle "Split current viewport top-and-bottom (Super+s)" :value :hsplit :badge "Win")
                    (make-picker-item :title "Close Focused Window" :subtitle "Close current viewport (Super+w)" :value :close-win :badge "Win")
                    (make-picker-item :title "New Shell Buffer" :subtitle "Create and switch to new *shell* REPL buffer" :value :new-shell :badge "Buf")
-                   (make-picker-item :title "New Scratch Buffer" :subtitle "Create a clean Common Lisp scratchpad buffer" :value :new-scratch :badge "Buf")
                    (make-picker-item :title "Reboot LispOS" :subtitle "Safely synchronize filesystems and reboot" :value :reboot :badge "Sys")
                    (make-picker-item :title "Power Off" :subtitle "Halt processor and power off machine" :value :poweroff :badge "Sys"))))
     (open-picker "Commands" commands on-execute-command :width 680)))

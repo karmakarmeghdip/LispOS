@@ -402,7 +402,7 @@
 
 (defun test-builtin-filesystem-commands ()
   (def-test-group "13. Built-in Filesystem Commands (ls, cd, pwd, cat, touch, mkdir, rm)"
-    (let ((engine (make-shell-engine :prompt "λ > "))
+    (let ((engine (make-shell-engine))
           (orig-cwd *default-pathname-defaults*))
       (unwind-protect
            (progn
@@ -418,10 +418,21 @@
                ;; cd into test-dir
                (feed-input engine (list (format nil "cd ~A" test-dir) :enter))
                (assert-test (search "lispos-test" (get-cwd-namestring)) "cd changes working directory")
+               (assert-test (search "lispos-test" (engine-prompt engine)) "Dynamic prompt shows new directory")
+
+               ;; cd to non-existent dir gives error
+               (feed-input engine '("cd non-existent-directory-xyz" :enter))
+               (assert-test (search "cd: no such file or directory" (engine-last-stderr engine))
+                            "cd non-existent directory reports error")
 
                ;; touch test.txt
                (feed-input engine '("touch test.txt" :enter))
                (assert-test (probe-file "test.txt") "touch creates file")
+
+               ;; cd to regular file gives error
+               (feed-input engine '("cd test.txt" :enter))
+               (assert-test (search "cd: not a directory" (engine-last-stderr engine))
+                            "cd regular file reports cd: not a directory")
 
                ;; write content to test.txt and cat it
                (with-open-file (out "test.txt" :direction :output :if-exists :supersede)
@@ -430,16 +441,40 @@
                (assert-test (search "Pure Common Lisp Userland" (engine-last-stdout engine))
                             "cat reads file contents")
 
-               ;; ls
+               ;; ls directory
                (feed-input engine '("ls" :enter))
                (assert-test (search "test.txt" (engine-last-stdout engine)) "ls lists test.txt")
 
-               ;; rm
+               ;; ls single file
+               (feed-input engine '("ls test.txt" :enter))
+               (assert-test (search "test.txt" (engine-last-stdout engine)) "ls single file lists that file")
+
+               ;; ls -l
+               (feed-input engine '("ls -l" :enter))
+               (assert-test (search "rw-r--r--" (engine-last-stdout engine)) "ls -l displays permissions")
+
+               ;; ls -a
+               (feed-input engine '("ls -a" :enter))
+               (assert-test (and (search "." (engine-last-stdout engine))
+                                 (search ".." (engine-last-stdout engine)))
+                            "ls -a displays . and ..")
+
+               ;; mkdir subfolder with file and test recursive rm -r
+               (feed-input engine '("mkdir subfolder" :enter))
+               (feed-input engine '("touch subfolder/nested.txt" :enter))
+               (assert-test (probe-file "subfolder/nested.txt") "Nested file created")
+               (feed-input engine '("rm -r subfolder" :enter))
+               (assert-test (null (probe-file "subfolder")) "rm -r recursively deletes directory tree")
+
+               ;; rm single file
                (feed-input engine '("rm test.txt" :enter))
                (assert-test (null (probe-file "test.txt")) "rm deletes file")
 
-               ;; cd back out and cleanup
-               (feed-input engine '("cd /tmp" :enter))
+               ;; cd ..
+               (feed-input engine '("cd .." :enter))
+               (assert-test (string= (get-cwd-namestring) "/tmp") "cd .. navigates to parent directory")
+
+               ;; cleanup
                (feed-input engine (list (format nil "rm -r ~A" test-dir) :enter))))
         (setf *default-pathname-defaults* orig-cwd)))))
 

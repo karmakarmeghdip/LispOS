@@ -28,7 +28,7 @@
   "Find a buffer by its name string."
   (find name *buffers* :key #'buffer-name :test #'string=))
 
-(defun create-buffer (name &key (mode :scratch) (engine nil) (file-path nil))
+(defun create-buffer (name &key (mode :shell) (engine nil) (file-path nil))
   "Create and register a new buffer. If a buffer with NAME already exists, returns it."
   (let ((existing (find-buffer name)))
     (if existing
@@ -37,7 +37,7 @@
                                 :mode mode
                                 :engine (or engine
                                             (case mode
-                                              ((:shell :scratch)
+                                              (:shell
                                                (lispos.shell:make-shell-engine))
                                               (t nil)))
                                 :file-path file-path)))

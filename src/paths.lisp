@@ -4,28 +4,28 @@
 
 (defparameter +root+ "/")
 
-(defparameter +system-root+ "/System")
-(defparameter +system-core+ "/System/Core")
-(defparameter +system-libraries+ "/System/Libraries")
-(defparameter +system-source+ "/System/Source")
-(defparameter +system-configuration+ "/System/Configuration")
-(defparameter +system-runtime+ "/System/Runtime")
+(defparameter +system-root+ "/System/")
+(defparameter +system-core+ "/System/Core/")
+(defparameter +system-libraries+ "/System/Libraries/")
+(defparameter +system-source+ "/System/Source/")
+(defparameter +system-configuration+ "/System/Configuration/")
+(defparameter +system-runtime+ "/System/Runtime/")
 
 ;; Kernel pseudo-filesystems (hidden away from /)
-(defparameter +proc-root+ "/System/Kernel/Processes")
-(defparameter +sys-root+ "/System/Kernel/Hardware")
-(defparameter +dev-root+ "/System/Kernel/Devices")
+(defparameter +proc-root+ "/System/Kernel/Processes/")
+(defparameter +sys-root+ "/System/Kernel/Hardware/")
+(defparameter +dev-root+ "/System/Kernel/Devices/")
 
 ;; Device paths
 (defparameter +drm-card0+ "/System/Kernel/Devices/dri/card0")
 (defparameter +serial-console+ "/System/Kernel/Devices/ttyS0")
 
 ;; Userland folders
-(defparameter +applications-root+ "/Applications")
-(defparameter +library-root+ "/Library")
-(defparameter +library-fonts+ "/Library/Fonts")
-(defparameter +users-root+ "/Users")
-(defparameter +admin-home+ "/Users/Admin")
+(defparameter +applications-root+ "/Applications/")
+(defparameter +library-root+ "/Library/")
+(defparameter +library-fonts+ "/Library/Fonts/")
+(defparameter +users-root+ "/Users/")
+(defparameter +admin-home+ "/Users/Admin/")
 
 (defun setup-logical-pathnames ()
   "Map SBCL's SYS logical pathname and LISPOS to the non-FHS directory hierarchy."
@@ -43,7 +43,7 @@
                      +system-source+
                      +system-configuration+
                      +system-runtime+
-                     "/System/Kernel"
+                     "/System/Kernel/"
                      +proc-root+
                      +sys-root+
                      +dev-root+
@@ -53,4 +53,8 @@
                      +users-root+
                      +admin-home+))
     (ignore-errors
-     (ensure-directories-exist (concatenate 'string dir "/")))))
+     (let ((path-str (namestring dir)))
+       (ensure-directories-exist
+        (if (and (> (length path-str) 0) (char= (char path-str (1- (length path-str))) #\/))
+            path-str
+            (concatenate 'string path-str "/")))))))

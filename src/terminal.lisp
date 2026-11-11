@@ -30,8 +30,8 @@
   (font nil)
   (cols 80 :type fixnum)
   (rows 25 :type fixnum)
-  (header-height 30 :type fixnum)
-  (modeline-height 26 :type fixnum)
+  (header-height 0 :type fixnum)
+  (modeline-height 28 :type fixnum)
   (running-p nil :type boolean)
   (thread nil)
   (dirty-p t :type boolean))
@@ -49,24 +49,21 @@
          (h (lispos.display:display-height disp))
          (cw (lispos.font:font-char-width fnt))
          (lh (lispos.font:font-line-height fnt))
-         (header-h 30)
-         (modeline-h 26)
-         (workspace-h (- h header-h modeline-h))
+         (header-h 0)
+         (modeline-h 28)
+         (workspace-h (- h modeline-h))
          (cols (max 40 (floor (- w 40) cw)))
          (rows (max 10 (floor workspace-h lh))))
 
-    ;; 1. Initialize Default Buffers
+    ;; 1. Initialize Default Primary Shell Buffer
     (let ((shell-buf (lispos.buffer:create-buffer "*shell*"
                                                   :mode :shell
-                                                  :engine (or engine (lispos.shell:make-shell-engine))))
-          (scratch-buf (lispos.buffer:create-buffer "*scratch*"
-                                                    :mode :scratch)))
-      (declare (ignore scratch-buf))
-      ;; 2. Initialize Tiling Window Tree Root
+                                                  :engine (or engine (lispos.shell:make-shell-engine)))))
+      ;; 2. Initialize Tiling Window Tree Root (occupying full screen above modeline)
       (let ((root (lispos.window:make-window
                    :buffer shell-buf
                    :x 0
-                   :y header-h
+                   :y 0
                    :width w
                    :height workspace-h)))
         (setf lispos.window:*root-window* root
@@ -85,46 +82,52 @@
     (lispos.display:present-display disp)
     *terminal*))
 
-(defun render-header (term)
-  "Render top unified OS bar."
-  (let* ((disp (terminal-display term))
-         (fnt (terminal-font term))
-         (w (lispos.display:display-width disp))
-         (h (terminal-header-height term)))
-    (lispos.display:fill-rect disp 0 0 w h +header-bg+)
-    (lispos.display:fill-rect disp 0 (1- h) w 1 +win-border+)
-    ;; Left OS badge
-    (lispos.font:draw-text disp fnt 16 5 "LispOS" +header-fg+)
-    (lispos.font:draw-text disp fnt 80 5 "•" #xFF6C7086)
-    ;; Active workspaces / tags
-    (let* ((buffers (lispos.buffer:list-buffers))
-           (cur-x 100))
-      (dolist (b buffers)
-        (let* ((active-p (and lispos.window:*focused-window*
-                              (eq b (lispos.window:window-buffer lispos.window:*focused-window*))))
-               (tag (format nil " ~A " (lispos.buffer:buffer-name b)))
-               (tag-fg (if active-p #xFFF9E2AF #xFF6C7086))
-               (tag-bg (if active-p #xFF313244 nil)))
-          (setf cur-x (lispos.font:draw-text disp fnt cur-x 5 tag tag-fg tag-bg))
-          (incf cur-x 8))))
-    ;; Right hint shortcuts
-    (let ((hint "Super+b: Buffers  Super+f: Files  Super+v/s: Split  Super+p: Cmds"))
-      (let* ((hint-w (lispos.font:measure-text fnt hint))
-             (hx (max 450 (- w hint-w 16))))
-        (lispos.font:draw-text disp fnt hx 5 hint #xFF6C7086)))))
-
 (defun render-unified-modeline (term)
-  "Render single unified modeline at the bottom of the screen."
+  "Render single unified modeline at the bottom of the screen matching Emacs/Doom desktop style."
   (let* ((disp (terminal-display term))
          (fnt (terminal-font term))
          (w (lispos.display:display-width disp))
          (h (lispos.display:display-height disp))
          (mh (terminal-modeline-height term))
          (my (- h mh))
-         (info (lispos.window:active-window-modeline-info)))
+         (ty (+ my 4))
+         ;; Left title: current path / buffer
+         (left-title (lispos.window:active-window-modeline-info))
+         ;; Center clock: HH:MM:SS
+         (clock-text (multiple-value-bind (s m hr) (decode-universal-time (get-universal-time))
+                       (format nil "~2,'0D:~2,'0D:~2,'0D" hr m s)))
+         (clock-w (lispos.font:measure-text fnt clock-text))
+         (clock-x (round (- w clock-w) 2))
+         ;; Right system status indicators: Bluetooth, Wi-Fi, Battery
+         (bt-icon (string (code-char #xF293)))
+         (wifi-icon (string (code-char #xF1EB)))
+         (bat-icon (string (code-char #xF0079)))
+         (bat-pct " 100%")
+         (spacer "  ")
+         (total-right-w (+ (lispos.font:measure-text fnt bt-icon)
+                           (lispos.font:measure-text fnt spacer)
+                           (lispos.font:measure-text fnt wifi-icon)
+                           (lispos.font:measure-text fnt spacer)
+                           (lispos.font:measure-text fnt bat-icon)
+                           (lispos.font:measure-text fnt bat-pct)))
+         (rx (- w total-right-w 16)))
+    ;; Background and top border line
     (lispos.display:fill-rect disp 0 my w mh +modeline-bg+)
     (lispos.display:fill-rect disp 0 my w 1 +win-border+)
-    (lispos.font:draw-text disp fnt 16 (+ my 4) info +modeline-fg+)))
+
+    ;; 1. Left: Active buffer / path title
+    (lispos.font:draw-text disp fnt 16 ty left-title +modeline-fg+)
+
+    ;; 2. Center: Clock HH:MM:SS
+    (lispos.font:draw-text disp fnt clock-x ty clock-text #xFFBAC2DE)
+
+    ;; 3. Right: Bluetooth, Wi-Fi, Battery
+    (setf rx (lispos.font:draw-text disp fnt rx ty bt-icon #xFFCDD6F4))
+    (setf rx (lispos.font:draw-text disp fnt rx ty spacer #xFFCDD6F4))
+    (setf rx (lispos.font:draw-text disp fnt rx ty wifi-icon #xFFCDD6F4))
+    (setf rx (lispos.font:draw-text disp fnt rx ty spacer #xFFCDD6F4))
+    (setf rx (lispos.font:draw-text disp fnt rx ty bat-icon #xFFA6E3A1))
+    (lispos.font:draw-text disp fnt rx ty bat-pct #xFFA6E3A1)))
 
 (defun render-output-line (disp fnt x y line-text max-w)
   "Draw a single line of output with semantic syntax coloring."
@@ -137,13 +140,18 @@
     ((or (and (>= (length line-text) 7) (string= (subseq line-text 0 7) "[Error]"))
          (search "[ABORT]" line-text))
      (lispos.font:draw-text disp fnt x y line-text +stderr-text+))
-    ;; Shell prompt line: "λ > ..."
-    ((search "λ > " line-text)
-     (let ((px (lispos.font:draw-text disp fnt x y "λ" +prompt-lambda+)))
-       (let ((ax (lispos.font:draw-text disp fnt px y " > " +prompt-arrow+)))
-         (let ((pos (search " > " line-text)))
-           (when (and pos (< (+ pos 3) (length line-text)))
-             (lispos.font:draw-text disp fnt ax y (subseq line-text (+ pos 3)) +input-text+))))))
+    ;; Shell prompt line: "λ [...] > ..." or "λ > ..."
+    ((and (>= (length line-text) 2) (string= (subseq line-text 0 2) "λ "))
+     (let* ((arrow-pos (search " > " line-text)))
+       (if arrow-pos
+           (let* ((prefix (subseq line-text 0 arrow-pos))
+                  (cmd (if (< (+ arrow-pos 3) (length line-text))
+                           (subseq line-text (+ arrow-pos 3))
+                           ""))
+                  (px (lispos.font:draw-text disp fnt x y prefix +prompt-lambda+))
+                  (ax (lispos.font:draw-text disp fnt px y " > " +prompt-arrow+)))
+             (lispos.font:draw-text disp fnt ax y cmd +input-text+))
+           (lispos.font:draw-text disp fnt x y line-text +prompt-lambda+))))
     ;; Standard stdout line
     (t
      (lispos.font:draw-text disp fnt x y line-text +stdout-text+))))
@@ -222,7 +230,7 @@
       ;; Title & Query Filter bar
       (lispos.display:fill-rect disp px py pw 36 #xFF1E1E2E)
       (lispos.font:draw-text disp fnt (+ px 16) (+ py 8)
-                             (format nil "🔍 ~A" (lispos.picker:picker-title picker))
+                             (format nil "~A ~A" (string (code-char #xF002)) (lispos.picker:picker-title picker))
                              #xFF89B4FA)
 
       ;; Search Input Box
@@ -270,7 +278,7 @@
                       (incf item-y item-h))))))))
 
 (defun render-terminal (term)
-  "Render full desktop: top header, all tiled windows, bottom unified modeline, and popup picker."
+  "Render full desktop: all tiled windows, bottom unified modeline, and popup picker."
   (let* ((disp (terminal-display term))
          (fnt (terminal-font term))
          (w (lispos.display:display-width disp))
@@ -279,19 +287,16 @@
     ;; 1. Clear background
     (lispos.display:fill-rect disp 0 0 w h +bg-color+)
 
-    ;; 2. Render Header Bar
-    (render-header term)
-
-    ;; 3. Render All Leaf Windows
+    ;; 2. Render All Leaf Windows (full height from top to modeline)
     (let ((leaves (lispos.window:all-leaf-windows))
           (focused lispos.window:*focused-window*))
       (dolist (win leaves)
         (render-window disp fnt win (eq win focused))))
 
-    ;; 4. Render Unified Bottom Modeline
+    ;; 3. Render Unified Bottom Modeline
     (render-unified-modeline term)
 
-    ;; 5. Render Centered Floating Picker Overlay (if active)
+    ;; 4. Render Centered Floating Picker Overlay (if active)
     (when lispos.picker:*active-picker*
       (render-picker-overlay disp fnt lispos.picker:*active-picker*)))
   (setf (terminal-dirty-p term) nil))
@@ -302,12 +307,8 @@
     (:vsplit (lispos.window:split-window-vertically))
     (:hsplit (lispos.window:split-window-horizontally))
     (:close-win (lispos.window:close-window))
-    (:new-shell
-     (let ((buf (lispos.buffer:create-buffer (format nil "*shell-~D*" (gensym)) :mode :shell)))
-       (when lispos.window:*focused-window*
-         (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf))))
-    (:new-scratch
-     (let ((buf (lispos.buffer:create-buffer (format nil "*scratch-~D*" (gensym)) :mode :scratch)))
+    ((:new-shell :new-scratch)
+     (let ((buf (lispos.buffer:create-buffer (format nil "*shell-~D*" (1+ (length (lispos.buffer:list-buffers)))) :mode :shell)))
        (when lispos.window:*focused-window*
          (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf))))
     (:reboot

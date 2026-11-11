@@ -70,9 +70,10 @@
       (let* ((orig-buf (window-buffer target))
              ;; Left child keeps original buffer
              (child1 (make-window :buffer orig-buf :parent target))
-             ;; Right child displays a scratch buffer or second buffer
+             ;; Right child displays an existing second buffer or creates a new shell buffer
              (other-buf (or (find-if (lambda (b) (not (eq b orig-buf))) (lispos.buffer:list-buffers))
-                            (lispos.buffer:create-buffer "*scratch*" :mode :scratch)))
+                            (lispos.buffer:create-buffer (format nil "*shell-~D*" (1+ (length (lispos.buffer:list-buffers))))
+                                                         :mode :shell)))
              (child2 (make-window :buffer other-buf :parent target)))
         (setf (window-split-type target) :vertical
               (window-split-ratio target) 0.5
@@ -94,7 +95,8 @@
       (let* ((orig-buf (window-buffer target))
              (child1 (make-window :buffer orig-buf :parent target))
              (other-buf (or (find-if (lambda (b) (not (eq b orig-buf))) (lispos.buffer:list-buffers))
-                            (lispos.buffer:create-buffer "*scratch*" :mode :scratch)))
+                            (lispos.buffer:create-buffer (format nil "*shell-~D*" (1+ (length (lispos.buffer:list-buffers))))
+                                                         :mode :shell)))
              (child2 (make-window :buffer other-buf :parent target)))
         (setf (window-split-type target) :horizontal
               (window-split-ratio target) 0.5
@@ -177,13 +179,25 @@
            (when best (focus-window (first (sort best #'< :key #'window-y))))))))))
 
 (defun active-window-modeline-info ()
-  "Generate unified status line information for active window and system."
+  "Generate unified status line information for active window matching Emacs desktop modeline."
   (let* ((win (or *focused-window* (first (all-leaf-windows))))
          (buf (and win (window-buffer win)))
          (buf-name (if buf (lispos.buffer:buffer-name buf) "*none*"))
-         (mode-str (if buf (string-upcase (symbol-name (lispos.buffer:buffer-mode buf))) "NORMAL"))
-         (pkg (package-name *package*)))
-    (multiple-value-bind (row col)
-        (if buf (lispos.buffer:buffer-cursor-position buf) (values 0 0))
-      (format nil "[ ~A ]  ~A   •   ~A   │   Ln ~D, Col ~D   │   Super+b: Buffers   Super+f: Files   Super+v/s: Split"
-              mode-str buf-name pkg (1+ row) (1+ col)))))
+         (buf-mode (and buf (lispos.buffer:buffer-mode buf))))
+    (cond
+      ((null buf) "*none*")
+      ((eq buf-mode :shell)
+       (let* ((cwd (or (ignore-errors (lispos.shell:get-cwd-namestring)) "~"))
+              (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
+              (clean-home (if (and admin-home (> (length admin-home) 1)
+                                   (char= (char admin-home (1- (length admin-home))) #\/))
+                              (subseq admin-home 0 (1- (length admin-home)))
+                              admin-home))
+              (disp-cwd (cond
+                          ((or (string= cwd clean-home) (string= cwd "/Users/Admin") (string= cwd "/Users/Admin/")) "~")
+                          ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
+                           (concatenate 'string "~" (subseq cwd (length clean-home))))
+                          (t cwd))))
+         (format nil "~A - ~A" disp-cwd (if (string= buf-name "*shell*") "lispos" buf-name))))
+      (t
+       (format nil "~A - ~A" buf-name (string-downcase (symbol-name buf-mode)))))))

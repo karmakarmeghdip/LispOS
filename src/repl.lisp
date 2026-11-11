@@ -17,6 +17,7 @@
 (defun run-repl-loop ()
   "Standard read-eval-print loop with interactive restarts."
   (setf *default-pathname-defaults* (pathname lispos.paths:+admin-home+))
+  (ignore-errors (sb-posix:chdir (namestring *default-pathname-defaults*)))
   (setf *package* (find-package :cl-user))
   (format t "~%======================================================~%")
   (format t " Welcome to LispOS (PID 1 Common Lisp Monolithic Userland)~%")

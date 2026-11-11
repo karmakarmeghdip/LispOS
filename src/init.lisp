@@ -81,6 +81,10 @@
   ;; 3. Mount Pseudo-Filesystems (Non-FHS)
   (ignore-errors (mount-filesystems))
 
+  ;; 3.1. Set default working directory to Admin home
+  (setf *default-pathname-defaults* (pathname lispos.paths:+admin-home+))
+  (ignore-errors (sb-posix:chdir (namestring lispos.paths:+admin-home+)))
+
   ;; 3.5. Load Hardware Kernel Modules
   (format t "[INIT] Loading hardware kernel modules...~%")
   (lispos.sys:load-kernel-module "/System/Libraries/Modules/bochs.ko")

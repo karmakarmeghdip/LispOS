@@ -9,7 +9,7 @@ all: initramfs
 
 image: build/Init
 
-build/Init: build-image.lisp lispos.asd src/*.lisp
+build/Init: build-image.lisp lispos.asd src/*.lisp src/commands/*.lisp
 	@mkdir -p build
 	@echo "==> Compiling monolithic SBCL image..."
 	sbcl --script build-image.lisp

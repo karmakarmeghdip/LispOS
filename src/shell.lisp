@@ -34,7 +34,7 @@
          (clean-home (if (and admin-home (> (length admin-home) 1)
                               (char= (char admin-home (1- (length admin-home))) #\/))
                          (subseq admin-home 0 (1- (length admin-home)))
-                         admin-home))
+                         (or admin-home "/Users/Admin")))
          (display-cwd (cond
                         ((string= cwd clean-home) "~")
                         ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
@@ -46,16 +46,26 @@
   "Resolve PATH-STR relative to *default-pathname-defaults*, expanding ~ to Admin home."
   (let* ((clean-str (string-trim '(#\Space #\Tab #\Newline #\Return) (or path-str "")))
          (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
-         (home-dir (or admin-home "/Users/Admin/")))
+         (home-dir (if (and admin-home (> (length admin-home) 0))
+                       (if (char= (char admin-home (1- (length admin-home))) #\/)
+                           admin-home
+                           (concatenate 'string admin-home "/"))
+                       "/Users/Admin/")))
     (cond
-      ((or (zerop (length clean-str)) (string= clean-str "~"))
+      ((or (zerop (length clean-str)) (string= clean-str "~") (string= clean-str "~/"))
        (pathname home-dir))
       ((and (>= (length clean-str) 2) (string= (subseq clean-str 0 2) "~/"))
        (pathname (concatenate 'string home-dir (subseq clean-str 2))))
       ((char= (char clean-str 0) #\/)
        (pathname clean-str))
       (t
-       (merge-pathnames clean-str *default-pathname-defaults*)))))
+       ;; Ensure *default-pathname-defaults* is treated as a directory pathname with trailing slash
+       (let* ((cwd-str (namestring *default-pathname-defaults*))
+              (ensured-cwd (if (and (> (length cwd-str) 0)
+                                    (char= (char cwd-str (1- (length cwd-str))) #\/))
+                               *default-pathname-defaults*
+                               (pathname (concatenate 'string cwd-str "/")))))
+         (merge-pathnames clean-str ensured-cwd))))))
 
 (defvar *shell-commands* (make-hash-table :test #'equalp)
   "Registry mapping shell command names to handler functions.")
