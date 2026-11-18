@@ -59,6 +59,13 @@
   (:use :cl)
   (:export
    #:*active-picker*
+   #:picker-item
+   #:picker-item-p
+   #:make-picker-item
+   #:picker-item-title
+   #:picker-item-subtitle
+   #:picker-item-badge
+   #:picker-item-value
    #:picker
    #:picker-p
    #:make-picker

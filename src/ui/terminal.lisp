@@ -215,8 +215,10 @@
                              (ln-str (format nil "~VD │" digits (1+ line-idx))))
                         (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y ln-str ln-col)))))
 
-              ;; Visual selection highlight in :select mode
-              (when (and is-editor (eq (lispos.buffer:editor-buffer-helix-mode buf) :select))
+              ;; Visual selection highlight in :select mode or when selection active
+              (when (and is-editor
+                         (or (eq (lispos.buffer:editor-buffer-helix-mode buf) :select)
+                             (lispos.buffer:editor-buffer-selection-anchor-row buf)))
                 (multiple-value-bind (s-row s-col e-row e-col) (lispos.buffer::%get-selection-bounds buf)
                   (when (and (>= line-idx s-row) (<= line-idx e-row))
                     (let* ((line-len (length line))
@@ -291,11 +293,11 @@
         (if (null filtered)
             (lispos.font:draw-text disp fnt (+ px 20) (+ item-y 6) "No matching entries" #xFF6C7086)
             (loop for i from 0 below item-count
-                  for (item . nil) in filtered do
+                  for item in filtered do
                     (let* ((selected-p (= i (lispos.picker:picker-selected-index picker)))
                            (bg (if selected-p +picker-sel-bg+ nil))
                            (fg (if selected-p +picker-sel-fg+ #xFFCDD6F4))
-                           (badge (lispos.picker::picker-item-badge item)))
+                           (badge (lispos.picker:picker-item-badge item)))
                       (when bg
                         (lispos.display:fill-rect disp (+ px 8) item-y (- pw 16) (- item-h 2) bg))
                       ;; Pointer indicator
@@ -304,12 +306,12 @@
                                              #xFFF9E2AF)
                       ;; Title
                       (lispos.font:draw-text disp fnt (+ px 36) (+ item-y 4)
-                                             (lispos.picker::picker-item-title item)
+                                             (lispos.picker:picker-item-title item)
                                              fg)
                       ;; Subtitle
-                      (when (lispos.picker::picker-item-subtitle item)
+                      (when (lispos.picker:picker-item-subtitle item)
                         (lispos.font:draw-text disp fnt (+ px 240) (+ item-y 4)
-                                               (lispos.picker::picker-item-subtitle item)
+                                               (lispos.picker:picker-item-subtitle item)
                                                #xFF6C7086))
                       ;; Right-side badge
                       (when badge
@@ -467,8 +469,8 @@
 (defun terminal-event-loop (term)
   "Background event dispatcher polling evdev input and updating screen."
   (format t "[TERMINAL] Interactive GUI Shell event loop started.~%")
-  (handler-case
-      (loop while (terminal-running-p term) do
+  (loop while (terminal-running-p term) do
+    (handler-case
         (let ((handled-any nil))
           ;; Drain all currently queued input events
           (loop for ev = (lispos.input:poll-input-event)
@@ -478,11 +480,11 @@
                                          (lispos.input:input-event-key ev)
                                          :char (lispos.input:input-event-char ev)
                                          :modifiers (lispos.input:input-event-modifiers ev))
-                    (setf handled-any t))))
-        ;; Sleep ~16ms (~60Hz tick)
-        (sleep 0.016))
-    (error (c)
-      (format t "[TERMINAL] Loop caught condition: ~A~%" c))))
+                    (setf handled-any t)))
+          (sleep 0.016))
+      (error (c)
+        (format t "[TERMINAL Error] Event loop caught condition: ~A~%" c)
+        (sleep 0.05)))))
 
 (defun start-terminal-thread (&optional (term *terminal*))
   "Start the terminal event dispatcher in a dedicated thread."

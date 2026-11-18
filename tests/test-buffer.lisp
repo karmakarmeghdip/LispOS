@@ -167,14 +167,17 @@
       (buffer-handle-key ed #\k :char #\k)
       (assert-test (= (editor-buffer-cursor-row ed) 0) "'k' moves up to row 0")
 
-      (buffer-handle-key ed #\x :char #\x)
-      (assert-test (string= (aref (editor-buffer-lines ed) 0) "he quick brown fox") "'x' deletes char under cursor")
+      ;; In Helix: 'd' immediately deletes char under cursor (1-char selection)
+      (buffer-handle-key ed #\d :char #\d)
+      (assert-test (string= (aref (editor-buffer-lines ed) 0) "he quick brown fox") "'d' deletes char under cursor")
 
+      ;; In Helix: 'x' selects current line, 'd' deletes selection ('xd' deletes line)
+      (buffer-handle-key ed #\x :char #\x)
+      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'x' selects current line into select mode")
       (buffer-handle-key ed #\d :char #\d)
-      (buffer-handle-key ed #\d :char #\d)
-      (assert-test (= (length (editor-buffer-lines ed)) 1) "'dd' deleted current line")
+      (assert-test (= (length (editor-buffer-lines ed)) 1) "'xd' deleted current line")
       (assert-test (string= (aref (editor-buffer-lines ed) 0) "jumps over the dog") "remaining line is second line")
-      (assert-test (string= (editor-buffer-clipboard ed) "he quick brown fox") "'dd' saved deleted line to clipboard")
+      (assert-test (string= (editor-buffer-clipboard ed) "he quick brown fox") "'xd' saved deleted line to clipboard")
 
       (buffer-handle-key ed #\p :char #\p)
       (assert-test (= (length (editor-buffer-lines ed)) 2) "'p' pasted line below")
@@ -220,7 +223,7 @@
       (delete-file tmp-path))))
 
 ;;; ---------------------------------------------------------------------------
-;;; 6. Helix Selection Mode (v, V, motions, y, d, c)
+;;; 6. Helix Selection Mode (v, x, X, %, ;, Alt-;, motions, y, d, c)
 ;;; ---------------------------------------------------------------------------
 
 (defun test-helix-selection-mode ()
@@ -247,18 +250,30 @@
       (buffer-handle-key ed #\y :char #\y)
       (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'y' returns to :normal mode")
       (assert-test (null (editor-buffer-selection-anchor-row ed)) "anchor cleared after yank")
-      (assert-test (string= (editor-buffer-clipboard ed) "First ") "yanked exact selected text into clipboard")
+      (assert-test (string= (editor-buffer-clipboard ed) "First l") "yanked exact selected text into clipboard")
 
-      ;; Test 'V' line selection
-      (buffer-handle-key ed #\V :char #\V)
-      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'V' enters select mode for line")
+      ;; Helix 'x' line selection
+      (buffer-handle-key ed #\x :char #\x)
+      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'x' enters select mode for line")
       (assert-test (= (editor-buffer-selection-anchor-col ed) 0) "anchor col is 0 for line select")
 
-      ;; Delete selection with 'd'
+      ;; Flip selection with Alt-;
+      (buffer-handle-key ed :alt-semicolon)
+      (assert-test (= (editor-buffer-cursor-col ed) 0) "Alt-; flipped cursor to start of line")
+
+      ;; Collapse selection with ';'
+      (buffer-handle-key ed #\; :char #\;)
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "';' collapsed selection to normal mode")
+
+      ;; Helix '%' select all
+      (buffer-handle-key ed #\% :char #\%)
+      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'%' selected entire buffer")
+
+      ;; Delete entire selection with 'd'
       (buffer-handle-key ed #\d :char #\d)
       (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'d' on selection returns to :normal")
-      (assert-test (= (length (editor-buffer-lines ed)) 1) "entire first line deleted")
-      (assert-test (string= (aref (editor-buffer-lines ed) 0) "Second line text") "remaining line is second line"))))
+      (assert-test (= (length (editor-buffer-lines ed)) 1) "entire buffer cleared")
+      (assert-test (string= (aref (editor-buffer-lines ed) 0) "") "buffer line is empty"))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; 7. Undo & Redo Subsystem (u, U)
@@ -273,8 +288,8 @@
             (editor-buffer-cursor-row ed) 0
             (editor-buffer-cursor-col ed) 0)
 
-      ;; Delete 'I' with 'x'
-      (buffer-handle-key ed #\x :char #\x)
+      ;; Delete 'I' with 'd'
+      (buffer-handle-key ed #\d :char #\d)
       (assert-test (string= (aref (editor-buffer-lines ed) 0) "nitial state") "state modified")
 
       ;; Undo with 'u'
@@ -355,6 +370,70 @@
         (assert-test (not (null sc)) "scratch command created and registered *scratch* buffer")))))
 
 ;;; ---------------------------------------------------------------------------
+;;; 11. Helix Match, Goto, and Transformations
+;;; ---------------------------------------------------------------------------
+
+(defun test-helix-advanced-features ()
+  (def-test-group "11. Helix Match, Goto, and Transformations"
+    (let ((ed (make-instance 'editor-buffer :name "*test-adv*")))
+      (setf (editor-buffer-lines ed)
+            (make-array 3 :adjustable t :fill-pointer 3
+                        :initial-contents (list "  (hello \"world\")" "second line" "third line"))
+            (editor-buffer-cursor-row ed) 0
+            (editor-buffer-cursor-col ed) 0)
+
+      ;; 1. Goto: gh goes to line start (0), gl goes to line end
+      (buffer-handle-key ed #\g :char #\g)
+      (buffer-handle-key ed #\l :char #\l)
+      (assert-test (= (editor-buffer-cursor-col ed) (1- (length "  (hello \"world\")"))) "gl jumps to line end")
+
+      (buffer-handle-key ed #\g :char #\g)
+      (buffer-handle-key ed #\h :char #\h)
+      (assert-test (= (editor-buffer-cursor-col ed) 0) "gh jumps to line start 0")
+
+      ;; 2. Match bracket: mm jumps to matching paren
+      (buffer-handle-key ed #\m :char #\m)
+      (buffer-handle-key ed #\m :char #\m)
+      (assert-test (char= (char (aref (editor-buffer-lines ed) 0) (editor-buffer-cursor-col ed)) #\))
+                   "mm jumps to matching closing paren")
+
+      ;; 3. Insert transitions: I at line start, A at line end
+      (buffer-handle-key ed :escape)
+      (buffer-handle-key ed #\I :char #\I)
+      (assert-test (eq (editor-buffer-helix-mode ed) :insert) "'I' enters insert mode")
+      (assert-test (= (editor-buffer-cursor-col ed) 2) "'I' positioned at first non-whitespace")
+      (buffer-handle-key ed :escape)
+
+      (buffer-handle-key ed #\A :char #\A)
+      (assert-test (eq (editor-buffer-helix-mode ed) :insert) "'A' enters insert mode")
+      (assert-test (= (editor-buffer-cursor-col ed) (length "  (hello \"world\")")) "'A' positioned at line end")
+      (buffer-handle-key ed :escape)
+
+      ;; 4. Text objects: miw selects inside word
+      (setf (editor-buffer-cursor-row ed) 1
+            (editor-buffer-cursor-col ed) 1) ; on "second"
+      (buffer-handle-key ed #\m :char #\m)
+      (buffer-handle-key ed #\i :char #\i)
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (eq (editor-buffer-helix-mode ed) :select) "miw enters select mode")
+      (assert-test (string= (lispos.buffer::%extract-selection-text ed) "second") "miw selected word 'second'")
+
+      ;; 5. Transformations: ~ toggles case
+      (buffer-handle-key ed #\~ :char #\~)
+      (assert-test (search "SECOND" (aref (editor-buffer-lines ed) 1)) "~ toggled case to uppercase")
+
+      ;; 6. Indent > and Unindent <
+      (buffer-handle-key ed #\> :char #\>)
+      (assert-test (search "  SECOND" (aref (editor-buffer-lines ed) 1)) "> indented line")
+      (buffer-handle-key ed #\< :char #\<)
+      (assert-test (search "SECOND" (aref (editor-buffer-lines ed) 1)) "< unindented line")
+
+      ;; 7. Join lines J
+      (buffer-handle-key ed #\J :char #\J)
+      (assert-test (= (length (editor-buffer-lines ed)) 2) "J joined 2 lines into 1")
+      (assert-test (search "third line" (aref (editor-buffer-lines ed) 1)) "joined content includes next line"))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Runner
 ;;; ---------------------------------------------------------------------------
 
@@ -375,6 +454,7 @@
   (test-helix-space-leader)
   (test-scratch-buffer-flow)
   (test-shell-commands)
+  (test-helix-advanced-features)
 
   (format t "~%================================================================~%")
   (format t " Test Results Summary: ~D Passed, ~D Failed.~%" *test-passes* *test-failures*)
