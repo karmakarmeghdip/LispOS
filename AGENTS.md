@@ -113,26 +113,108 @@ Agents working on LispOS must use the provided daemon harness to verify changes 
 
 ---
 
-## 4. Codebase Navigation
+## 4. Codebase Architecture & Subsystems
 
-| File | Purpose |
-|---|---|
-| [`lispos.asd`](file:///home/meghdip/Projects/LispOS/lispos.asd) | ASDF system definition and subsystem dependencies (cffi, slynk, bordeaux-threads). |
-| [`build-image.lisp`](file:///home/meghdip/Projects/LispOS/build-image.lisp) | Script to load Quicklisp, load `:lispos`, configure CFFI, and dump monolithic `build/Init`. |
-| [`Makefile`](file:///home/meghdip/Projects/LispOS/Makefile) | Full pipeline: SBCL compilation, non-FHS directory tree, library bundling, patchelf + trailer patch, QEMU runner, harness integration. |
-| [`src/package.lisp`](file:///home/meghdip/Projects/LispOS/src/package.lisp) | Package definitions (`lispos.paths`, `lispos.sys`, `lispos.drm`, `lispos.input`, `lispos.repl`, `lispos.sandbox`, `lispos.init`). |
-| [`src/paths.lisp`](file:///home/meghdip/Projects/LispOS/src/paths.lisp) | Non-FHS pathname constants and logical pathname translations (`SYS:`, `CORE:`, etc.). |
-| [`src/syscalls.lisp`](file:///home/meghdip/Projects/LispOS/src/syscalls.lisp) | Direct libc/Linux syscall CFFI bindings (`mount`, `umount`, `finit_module`, ioctl, signal, reboot). |
-| [`src/drm.lisp`](file:///home/meghdip/Projects/LispOS/src/drm.lisp) | Dumb-buffer KMS graphics, `drmModeDirtyFB` page flusher, 8x8 font engine, drawing primitives. |
-| [`src/input.lisp`](file:///home/meghdip/Projects/LispOS/src/input.lisp) | Background thread listening on `/System/Kernel/Devices/input/event*` with non-blocking libc `read`. |
-| [`src/repl.lisp`](file:///home/meghdip/Projects/LispOS/src/repl.lisp) | SLY/Slynk server on `0.0.0.0:4005` and fallback TTY serial REPL loop. |
-| [`src/sandbox.lisp`](file:///home/meghdip/Projects/LispOS/src/sandbox.lisp) | Restricted `safe-eval` evaluator with `*read-eval* nil` for unprivileged applications. |
-| [`src/init.lisp`](file:///home/meghdip/Projects/LispOS/src/init.lisp) | Monolithic PID 1 entry point (`boot-os`), global crash guard, boot splash renderer, supervisor heartbeat loop. |
-| [`tools/harness.py`](file:///home/meghdip/Projects/LispOS/tools/harness.py) | Python daemon harness providing QEMU lifecycle management, SLYNK wire protocol client, and QMP screendump converter. |
+LispOS source code is strictly structured into modular subsystems under [`src/`](file:///home/meghdip/Projects/LispOS/src/). **Never dump loose `.lisp` files directly into `src/`.** Every component belongs to a designated subsystem with its own localized `package.lisp`:
+
+```
+src/
+├── core/                      # Low-level platform & runtime
+│   ├── package.lisp           # lispos.paths, lispos.sys
+│   ├── paths.lisp             # Non-FHS root paths & logical pathname mappings
+│   └── syscalls.lisp          # Linux syscalls (mount, umount, finit_module, ioctl)
+├── hal/                       # Hardware Abstraction Layer
+│   ├── drm/                   # KMS graphics driver (ioctl.lisp, framebuffer.lisp)
+│   └── input/                 # evdev reader (keycodes.lisp, evdev.lisp)
+├── graphics/                  # 2D Rendering & Typography
+│   ├── package.lisp           # lispos.display, lispos.font
+│   ├── surface.lisp           # Double-buffered display backbuffer & dirty rect damage tracker
+│   └── font.lisp              # FreeType2 rasterizer & glyph bitmap cache
+├── ui/                        # Tiling Window Manager & Compositor
+│   ├── package.lisp           # lispos.buffer, lispos.window, lispos.picker, lispos.terminal
+│   ├── buffer.lisp            # Buffer protocol (lines, cursor point, modes)
+│   ├── window-tree.lisp       # Binary split-tree layout & directional focus
+│   ├── picker.lisp            # Centered floating fuzzy finder & command palette
+│   └── terminal.lisp          # Window tree renderer, modeline & compositor event loop
+├── shell/                     # Interactive Lisp / CLI Shell
+│   ├── package.lisp           # lispos.shell
+│   ├── state.lisp             # Shell engine struct & configuration
+│   ├── parser.lisp            # Tokenizer, paren balance validator & path resolver
+│   ├── line-editor.lisp       # Structural paren pairing, cursor nav, kill-ring
+│   ├── history.lisp           # Command history ring & uncommitted scratch retention
+│   ├── commands/              # Shell built-in command handlers
+│   │   ├── registry.lisp      # define-shell-command macro & registry table
+│   │   ├── filesystem.lisp    # ls, cd, pwd, cat, touch, mkdir, rm
+│   │   └── system.lisp        # ps, free, whoami, reboot, poweroff, help
+│   └── engine.lisp            # Dual-mode evaluator (Lisp form vs shell command)
+└── supervisor/                # PID 1 Init & Daemon Services
+    ├── package.lisp           # lispos.sandbox, lispos.repl, lispos.init
+    ├── sandbox.lisp           # Restricted safe-eval environment
+    ├── repl.lisp              # Serial console REPL (ttyS0) & SLYNK TCP server
+    └── init.lisp              # PID 1 entry point & immortal crash-guard loop
+```
+
+When implementing new features or adding new files:
+1. Locate the file within the proper subsystem directory.
+2. Export relevant symbols from that subsystem's `package.lisp`.
+3. Register the file in [`lispos.asd`](file:///home/meghdip/Projects/LispOS/lispos.asd) under the corresponding subsystem module component.
 
 ---
 
-## 5. Remote Access Over SSH
+## 5. SBCL Type Safety & Performance Conventions
+
+Instead of heavy external type systems (like Coalton) that introduce large dependency trees and conflict with low-level CFFI/SAP programming, **LispOS leverages SBCL's native compile-time type system**. Future threads must adhere to these conventions for safety and speed:
+
+### A. Strongly Typed `defstruct`
+Always specify slot types with default values:
+```lisp
+(defstruct (window (:constructor %make-window))
+  (id (gensym "WIN-") :type symbol)
+  (x 0 :type fixnum)
+  (y 0 :type fixnum)
+  (width 1280 :type fixnum)
+  (height 800 :type fixnum)
+  (split-ratio 0.5 :type single-float))
+```
+
+### B. Algebraic Union Types with `deftype`
+Model domain variants with `deftype` and `member`:
+```lisp
+(deftype split-direction ()
+  '(member :horizontal :vertical))
+
+(deftype pixel-argb ()
+  '(unsigned-byte 32))
+```
+
+### C. Function Signatures with `declaim (ftype ...)`
+Proclaim function signatures for public API boundaries and performance-critical functions:
+```lisp
+(declaim (ftype (function (fixnum fixnum fixnum fixnum pixel-argb) null) draw-rect))
+(defun draw-rect (x y w h color)
+  (declare (optimize (speed 3) (safety 1))
+           (type fixnum x y w h)
+           (type pixel-argb color))
+  ...)
+```
+
+### D. Exhaustive Matching with `ecase` / `etypecase`
+Avoid catch-all `case` clauses when handling typed domain variants. Use `ecase` or `etypecase` so SBCL signals exhaustive coverage errors or warnings if a case is missing:
+```lisp
+(ecase (window-split-type win)
+  (:vertical   (layout-vertical win))
+  (:horizontal (layout-horizontal win)))
+```
+
+### E. Defensive Runtime Boundaries
+Use `check-type` at API boundaries accepting untyped external or user input:
+```lisp
+(check-type target-path (or string pathname))
+```
+
+---
+
+## 6. Remote Access Over SSH
 
 When working remotely over SSH, tunnel both VNC (port 5900) and SLY (port 4005):
 ```bash
@@ -140,3 +222,4 @@ ssh -L 5900:127.0.0.1:5900 -L 4005:127.0.0.1:4005 <user>@<remote-ip>
 ```
 - **Live GUI:** Connect any VNC viewer (`vncviewer localhost:5900`, Remmina, TigerVNC, macOS Screen Sharing `vnc://localhost:5900`).
 - **Live REPL:** In local Emacs, run `M-x sly-connect RET localhost RET 4005`.
+

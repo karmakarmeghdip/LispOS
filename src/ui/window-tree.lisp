@@ -1,6 +1,9 @@
-;;;; src/window.lisp - Tiling Window Tree and Unified Modeline for LispOS
+;;;; src/ui/window-tree.lisp - Tiling Window Tree and Unified Modeline for LispOS
 
 (in-package :lispos.window)
+
+(deftype split-direction ()
+  '(member :horizontal :vertical))
 
 (defstruct window
   (id (gensym "WIN-") :type symbol)
@@ -12,7 +15,7 @@
   (scroll-row 0 :type fixnum)
   (scroll-col 0 :type fixnum)
   ;; Tree layout slots
-  (split-type nil :type (or null (member :horizontal :vertical)))
+  (split-type nil :type (or null split-direction))
   (split-ratio 0.5 :type single-float)
   (first-child nil)
   (second-child nil)
@@ -24,6 +27,7 @@
 (defvar *focused-window* nil
   "Currently focused leaf window receiving input.")
 
+(declaim (ftype (function (window) boolean) leaf-window-p))
 (defun leaf-window-p (win)
   "Return T if WIN is a leaf window displaying a buffer."
   (null (window-split-type win)))
@@ -38,6 +42,9 @@
 
 (defun layout-windows (win x y w h)
   "Recursively recalculate (x, y, width, height) bounds for WIN and all its child windows."
+  (declare (type window win)
+           (type fixnum x y w h)
+           (optimize (speed 3) (safety 1)))
   (setf (window-x win) x
         (window-y win) y
         (window-width win) w
@@ -182,22 +189,14 @@
   "Generate unified status line information for active window matching Emacs desktop modeline."
   (let* ((win (or *focused-window* (first (all-leaf-windows))))
          (buf (and win (window-buffer win)))
-         (buf-name (if buf (lispos.buffer:buffer-name buf) "*none*"))
-         (buf-mode (and buf (lispos.buffer:buffer-mode buf))))
-    (cond
-      ((null buf) "*none*")
-      ((eq buf-mode :shell)
-       (let* ((cwd (or (ignore-errors (lispos.shell:get-cwd-namestring)) "~"))
-              (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
-              (clean-home (if (and admin-home (> (length admin-home) 1)
-                                   (char= (char admin-home (1- (length admin-home))) #\/))
-                              (subseq admin-home 0 (1- (length admin-home)))
-                              admin-home))
-              (disp-cwd (cond
-                          ((or (string= cwd clean-home) (string= cwd "/Users/Admin") (string= cwd "/Users/Admin/")) "~")
-                          ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
-                           (concatenate 'string "~" (subseq cwd (length clean-home))))
-                          (t cwd))))
-         (format nil "~A - ~A" disp-cwd (if (string= buf-name "*shell*") "lispos" buf-name))))
-      (t
-       (format nil "~A - ~A" buf-name (string-downcase (symbol-name buf-mode)))))))
+         (buf-name (if buf (lispos.buffer:buffer-name buf) "*none*")))
+    (if (null buf)
+        "*none*"
+        (let ((mode-str (lispos.buffer:buffer-mode-name buf))
+              (details (lispos.buffer:buffer-modeline-details buf))
+              (mod-str (if (lispos.buffer:buffer-modified-p buf) "[*] " "")))
+          (case (lispos.buffer:buffer-mode buf)
+            (:shell
+             (format nil "~A - ~A" details (if (string= buf-name "*shell*") "lispos" buf-name)))
+            (t
+             (format nil "~A~A [~A] ~A" mod-str buf-name mode-str details)))))))

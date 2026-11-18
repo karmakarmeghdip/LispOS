@@ -1,4 +1,4 @@
-;;;; src/sandbox.lisp - Restricted SAFE-CL Evaluator for LispOS
+;;;; src/supervisor/sandbox.lisp - Restricted SAFE-CL Evaluator for LispOS
 
 (in-package :lispos.sandbox)
 
@@ -14,6 +14,7 @@
 
 (defun safe-eval (expr &optional (env nil))
   "Evaluate expression in restricted environment with *read-eval* disabled."
+  (declare (ignore env))
   (let ((*read-eval* nil)
         (*package* (find-package :safe-cl)))
     (eval expr)))

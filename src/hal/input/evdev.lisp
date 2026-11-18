@@ -1,4 +1,4 @@
-;;;; src/input.lisp - evdev Input, Keysym Translation, and Event Queue for LispOS
+;;;; src/hal/input/evdev.lisp - evdev Event Listener Loop and Queue
 
 (in-package :lispos.input)
 
@@ -14,81 +14,6 @@
 
 (defconstant +rel-x+ 0)
 (defconstant +rel-y+ 1)
-
-;; Standard Linux evdev key scancodes
-(defconstant +key-esc+ 1)
-(defconstant +key-1+ 2)
-(defconstant +key-2+ 3)
-(defconstant +key-3+ 4)
-(defconstant +key-4+ 5)
-(defconstant +key-5+ 6)
-(defconstant +key-6+ 7)
-(defconstant +key-7+ 8)
-(defconstant +key-8+ 9)
-(defconstant +key-9+ 10)
-(defconstant +key-0+ 11)
-(defconstant +key-minus+ 12)
-(defconstant +key-equal+ 13)
-(defconstant +key-backspace+ 14)
-(defconstant +key-tab+ 15)
-(defconstant +key-q+ 16)
-(defconstant +key-w+ 17)
-(defconstant +key-e+ 18)
-(defconstant +key-r+ 19)
-(defconstant +key-t+ 20)
-(defconstant +key-y+ 21)
-(defconstant +key-u+ 22)
-(defconstant +key-i+ 23)
-(defconstant +key-o+ 24)
-(defconstant +key-p+ 25)
-(defconstant +key-leftbrace+ 26)
-(defconstant +key-rightbrace+ 27)
-(defconstant +key-enter+ 28)
-(defconstant +key-leftctrl+ 29)
-(defconstant +key-a+ 30)
-(defconstant +key-s+ 31)
-(defconstant +key-d+ 32)
-(defconstant +key-f+ 33)
-(defconstant +key-g+ 34)
-(defconstant +key-h+ 35)
-(defconstant +key-j+ 36)
-(defconstant +key-k+ 37)
-(defconstant +key-l+ 38)
-(defconstant +key-semicolon+ 39)
-(defconstant +key-apostrophe+ 40)
-(defconstant +key-grave+ 41)
-(defconstant +key-leftshift+ 42)
-(defconstant +key-backslash+ 43)
-(defconstant +key-z+ 44)
-(defconstant +key-x+ 45)
-(defconstant +key-c+ 46)
-(defconstant +key-v+ 47)
-(defconstant +key-b+ 48)
-(defconstant +key-n+ 49)
-(defconstant +key-m+ 50)
-(defconstant +key-comma+ 51)
-(defconstant +key-dot+ 52)
-(defconstant +key-slash+ 53)
-(defconstant +key-rightshift+ 54)
-(defconstant +key-kpasterisk+ 55)
-(defconstant +key-leftalt+ 56)
-(defconstant +key-space+ 57)
-(defconstant +key-capslock+ 58)
-(defconstant +key-kpenter+ 96)
-(defconstant +key-rightctrl+ 97)
-(defconstant +key-rightalt+ 100)
-(defconstant +key-home+ 102)
-(defconstant +key-up+ 103)
-(defconstant +key-pageup+ 104)
-(defconstant +key-left+ 105)
-(defconstant +key-right+ 106)
-(defconstant +key-end+ 107)
-(defconstant +key-down+ 108)
-(defconstant +key-pagedown+ 109)
-(defconstant +key-insert+ 110)
-(defconstant +key-delete+ 111)
-(defconstant +key-leftmeta+ 125)
-(defconstant +key-rightmeta+ 126)
 
 (cffi:defcfun ("epoll_create1" %epoll-create1) :int
   (flags :int))
@@ -110,11 +35,26 @@
   (buf :pointer)
   (count :size))
 
-(defstruct input-event
-  (type :key-down)  ; :key-down, :key-up, :pointer
-  (key nil)         ; :left, :right, :up, :down, :enter, :backspace, or char
-  (char nil)        ; Character if printable, or nil
-  (modifiers nil))  ; List of active modifiers, e.g. (:ctrl :shift :super)
+(deftype input-event-type ()
+  '(member :key-down :key-up :pointer))
+
+(defstruct (input-event
+            (:constructor %make-input-event))
+  (type :key-down :type input-event-type)
+  (key nil :type (or symbol character null))
+  (char nil :type (or character null))
+  (modifiers nil :type list))
+
+(defun make-input-event (&key (type :key-down) key char modifiers)
+  (%make-input-event :type type
+                     :key key
+                     :char char
+                     :modifiers modifiers))
+
+(declaim (ftype (function (input-event symbol) boolean) modifier-active-p))
+(defun modifier-active-p (event mod)
+  "Check if modifier MOD is active on EVENT."
+  (not (null (member mod (input-event-modifiers event)))))
 
 ;; State variables
 (defvar *input-thread* nil)
@@ -135,11 +75,13 @@
 (defvar *event-queue* '())
 (defvar *event-lock* (sb-thread:make-mutex :name "LispOS-Input-Lock"))
 
+(declaim (ftype (function (input-event) list) enqueue-input-event))
 (defun enqueue-input-event (event)
   "Push event to the synchronized event queue."
   (sb-thread:with-mutex (*event-lock*)
     (setf *event-queue* (nconc *event-queue* (list event)))))
 
+(declaim (ftype (function () (or input-event null)) poll-input-event))
 (defun poll-input-event ()
   "Pop the next input-event from the queue, or nil if empty."
   (sb-thread:with-mutex (*event-lock*)
@@ -153,74 +95,6 @@
     (when *modifier-alt* (push :alt mods))
     (when *modifier-shift* (push :shift mods))
     mods))
-
-(defun scancode->keysym (code shift-p)
-  "Convert Linux evdev scancode to (values key-symbol char-or-nil)."
-  (case code
-    ;; Navigation / Control Keys
-    (103 (values :up nil))
-    (108 (values :down nil))
-    (105 (values :left nil))
-    (106 (values :right nil))
-    ((28 96) (values :enter #\Newline))
-    (14  (values :backspace nil))
-    (111 (values :delete nil))
-    (102 (values :home nil))
-    (107 (values :end nil))
-    (15  (values :tab #\Tab))
-    (1   (values :escape nil))
-    (57  (values #\Space #\Space))
-    ;; Numbers & Symbols row
-    (2   (if shift-p (values #\! #\!) (values #\1 #\1)))
-    (3   (if shift-p (values #\@ #\@) (values #\2 #\2)))
-    (4   (if shift-p (values #\# #\#) (values #\3 #\3)))
-    (5   (if shift-p (values #\$ #\$) (values #\4 #\4)))
-    (6   (if shift-p (values #\% #\%) (values #\5 #\5)))
-    (7   (if shift-p (values #\^ #\^) (values #\6 #\6)))
-    (8   (if shift-p (values #\& #\&) (values #\7 #\7)))
-    (9   (if shift-p (values #\* #\*) (values #\8 #\8)))
-    (10  (if shift-p (values #\( #\() (values #\9 #\9)))
-    (11  (if shift-p (values #\) #\)) (values #\0 #\0)))
-    (12  (if shift-p (values #\_ #\_) (values #\- #\-)))
-    (13  (if shift-p (values #\+ #\+) (values #\= #\=)))
-    ;; Letters
-    (30  (if shift-p (values #\A #\A) (values #\a #\a)))
-    (48  (if shift-p (values #\B #\B) (values #\b #\b)))
-    (46  (if shift-p (values #\C #\C) (values #\c #\c)))
-    (32  (if shift-p (values #\D #\D) (values #\d #\d)))
-    (18  (if shift-p (values #\E #\E) (values #\e #\e)))
-    (33  (if shift-p (values #\F #\F) (values #\f #\f)))
-    (34  (if shift-p (values #\G #\G) (values #\g #\g)))
-    (35  (if shift-p (values #\H #\H) (values #\h #\h)))
-    (23  (if shift-p (values #\I #\I) (values #\i #\i)))
-    (36  (if shift-p (values #\J #\J) (values #\j #\j)))
-    (37  (if shift-p (values #\K #\K) (values #\k #\k)))
-    (38  (if shift-p (values #\L #\L) (values #\l #\l)))
-    (50  (if shift-p (values #\M #\M) (values #\m #\m)))
-    (49  (if shift-p (values #\N #\N) (values #\n #\n)))
-    (24  (if shift-p (values #\O #\O) (values #\o #\o)))
-    (25  (if shift-p (values #\P #\P) (values #\p #\p)))
-    (16  (if shift-p (values #\Q #\Q) (values #\q #\q)))
-    (19  (if shift-p (values #\R #\R) (values #\r #\r)))
-    (31  (if shift-p (values #\S #\S) (values #\s #\s)))
-    (20  (if shift-p (values #\T #\T) (values #\t #\t)))
-    (22  (if shift-p (values #\U #\U) (values #\u #\u)))
-    (47  (if shift-p (values #\V #\V) (values #\v #\v)))
-    (17  (if shift-p (values #\W #\W) (values #\w #\w)))
-    (45  (if shift-p (values #\X #\X) (values #\x #\x)))
-    (21  (if shift-p (values #\Y #\Y) (values #\y #\y)))
-    (44  (if shift-p (values #\Z #\Z) (values #\z #\z)))
-    ;; Punctuation
-    (26  (if shift-p (values #\{ #\{) (values #\[ #\[)))
-    (27  (if shift-p (values #\} #\}) (values #\] #\])))
-    (39  (if shift-p (values #\: #\:) (values #\; #\;)))
-    (40  (if shift-p (values #\" #\") (values #\' #\')))
-    (41  (if shift-p (values #\~ #\~) (values #\` #\`)))
-    (43  (if shift-p (values #\| #\|) (values #\\ #\\)))
-    (51  (if shift-p (values #\< #\<) (values #\, #\,)))
-    (52  (if shift-p (values #\> #\>) (values #\. #\.)))
-    (53  (if shift-p (values #\? #\?) (values #\/ #\/)))
-    (t (values nil nil))))
 
 (defun register-key-hook (hook-fn)
   "Register a callback (lambda (code value)) for key events."

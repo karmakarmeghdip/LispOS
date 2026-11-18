@@ -1,4 +1,4 @@
-;;;; src/repl.lisp - Serial Console REPL and Slynk/Swank Server for LispOS
+;;;; src/supervisor/repl.lisp - Serial Console REPL and Slynk/Swank Server for LispOS
 
 (in-package :lispos.repl)
 

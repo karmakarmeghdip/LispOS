@@ -9,7 +9,7 @@ all: initramfs
 
 image: build/Init
 
-build/Init: build-image.lisp lispos.asd src/*.lisp src/commands/*.lisp
+build/Init: build-image.lisp lispos.asd $(shell find src -type f -name '*.lisp')
 	@mkdir -p build
 	@echo "==> Compiling monolithic SBCL image..."
 	sbcl --script build-image.lisp
@@ -140,6 +140,13 @@ test:
 	     --eval '(pushnew (truename ".") asdf:*central-registry* :test #'\''equal)' \
 	     --eval '(ql:quickload :lispos)' \
 	     --load tests/test-shell.lisp
+	@echo "==> Running LispOS Polymorphic CLOS Buffer & Helix Editor Test Suite..."
+	sbcl --non-interactive \
+	     --eval '(require :asdf)' \
+	     --eval '(let ((quicklisp-setup (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))) (when (probe-file quicklisp-setup) (load quicklisp-setup)))' \
+	     --eval '(pushnew (truename ".") asdf:*central-registry* :test #'\''equal)' \
+	     --eval '(ql:quickload :lispos)' \
+	     --load tests/test-buffer.lisp
 
 clean:
 	rm -rf build

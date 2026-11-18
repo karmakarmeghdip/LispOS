@@ -1,4 +1,4 @@
-;;;; src/init.lisp - PID 1 Boot Sequence and Immortal Supervisor for LispOS
+;;;; src/supervisor/init.lisp - PID 1 Boot Sequence and Immortal Supervisor for LispOS
 
 (in-package :lispos.init)
 
@@ -53,7 +53,6 @@
         (lispos.drm:draw-string (+ cx 20) (+ cy 180) "TTY REPL: active on serial console (ttyS0)" #xFFBAC2DE nil 2)
         (lispos.drm:draw-string (+ cx 20) (+ cy 240) "Evaluate (lispos.drm:draw-rect ...) in REPL to draw!" #xFFCBA6F7 nil 2)))
     (lispos.drm:flush-screen)))
-
 
 (defun boot-os ()
   "Top-level PID 1 entry point for LispOS."

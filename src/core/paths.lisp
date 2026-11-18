@@ -1,4 +1,4 @@
-;;;; src/paths.lisp - Central Pathname Constants and Logical Pathnames for LispOS
+;;;; src/core/paths.lisp - Central Pathname Constants and Logical Pathnames for LispOS
 
 (in-package :lispos.paths)
 
@@ -27,6 +27,7 @@
 (defparameter +users-root+ "/Users/")
 (defparameter +admin-home+ "/Users/Admin/")
 
+(declaim (ftype (function () list) setup-logical-pathnames))
 (defun setup-logical-pathnames ()
   "Map SBCL's SYS logical pathname and LISPOS to the non-FHS directory hierarchy."
   (setf (logical-pathname-translations "SYS")
@@ -35,6 +36,7 @@
   (setf (logical-pathname-translations "LISPOS")
         '(("**;*.*.*" "/System/Source/LispOS/**/*.*"))))
 
+(declaim (ftype (function () null) ensure-system-hierarchy))
 (defun ensure-system-hierarchy ()
   "Ensure all directories in the LispOS hierarchy exist on the filesystem."
   (dolist (dir (list +system-root+
@@ -57,4 +59,5 @@
        (ensure-directories-exist
         (if (and (> (length path-str) 0) (char= (char path-str (1- (length path-str))) #\/))
             path-str
-            (concatenate 'string path-str "/")))))))
+            (concatenate 'string path-str "/"))))))
+  nil)

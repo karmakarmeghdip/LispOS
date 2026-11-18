@@ -1,4 +1,4 @@
-;;;; src/display.lisp - Double-Buffered Display Subsystem for LispOS
+;;;; src/graphics/surface.lisp - Double-Buffered Display Subsystem for LispOS
 
 (in-package :lispos.display)
 

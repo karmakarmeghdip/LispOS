@@ -1,4 +1,4 @@
-;;;; src/syscalls.lisp - Linux System Call Wrappers for LispOS
+;;;; src/core/syscalls.lisp - Linux System Call Wrappers for LispOS
 
 (in-package :lispos.sys)
 
@@ -66,6 +66,7 @@
 
 (defconstant +sys-finit-module+ 313)
 
+(declaim (ftype (function (string &optional string) (or null t)) load-kernel-module))
 (defun load-kernel-module (path &optional (params ""))
   "Load a kernel module (.ko) using finit_module syscall."
   (when (probe-file path)
@@ -80,6 +81,8 @@
                              (file-namestring path) (sb-alien:get-errno)))))
           (sb-posix:close fd))))))
 
+(declaim (ftype (function (string string string &key (:flags unsigned-byte) (:data (or null string)))
+                          (values (or boolean null) &optional fixnum)) mount))
 (defun mount (source target fstype &key (flags 0) (data nil))
   "Mount a filesystem at target. Returns t on success, nil and errno on failure."
   (let ((data-ptr (if data (cffi:foreign-string-alloc data) (cffi:null-pointer))))
@@ -91,28 +94,36 @@
       (unless (cffi:null-pointer-p data-ptr)
         (cffi:foreign-string-free data-ptr)))))
 
+(declaim (ftype (function (string &optional fixnum) boolean) umount))
 (defun umount (target &optional (flags 0))
   "Unmount filesystem at target."
   (zerop (%c-umount2 target flags)))
 
+(declaim (ftype (function () null) sync-filesystem))
 (defun sync-filesystem ()
   "Flush filesystem buffers."
-  (%c-sync))
+  (%c-sync)
+  nil)
 
+(declaim (ftype (function () (values)) reboot poweroff))
 (defun reboot ()
   "Reboot the machine."
   (%c-sync)
-  (%c-reboot +linux-reboot-cmd-restart+))
+  (%c-reboot +linux-reboot-cmd-restart+)
+  (values))
 
 (defun poweroff ()
   "Power off the machine."
   (%c-sync)
-  (%c-reboot +linux-reboot-cmd-power-off+))
+  (%c-reboot +linux-reboot-cmd-power-off+)
+  (values))
 
+(declaim (ftype (function (fixnum unsigned-byte cffi:foreign-pointer) fixnum) ioctl))
 (defun ioctl (fd request arg-pointer)
   "Invoke ioctl on fd."
   (%c-ioctl fd request arg-pointer))
 
+(declaim (ftype (function (string) list) parse-ipv4))
 (defun parse-ipv4 (ip-str)
   "Convert dotted decimal string IP to 4 bytes list."
   (mapcar #'parse-integer (uiop:split-string ip-str :separator ".")))
@@ -161,6 +172,7 @@
                    (format t "[SYS] Failed to bring up ~A (errno ~A)~%" name (sb-alien:get-errno))))))
       (%c-close sock))))
 
+(declaim (ftype (function () null) reap-zombies))
 (defun reap-zombies ()
   "Reap all terminated child processes to prevent zombie accumulation."
   (loop
@@ -168,8 +180,10 @@
         (ignore-errors (sb-posix:waitpid -1 sb-posix:wnohang))
       (declare (ignore status))
       (unless (and pid (> pid 0))
-        (return)))))
+        (return))))
+  nil)
 
+(declaim (ftype (function () t) install-zombie-reaper))
 (defun install-zombie-reaper ()
   "Install a SIGCHLD handler to reap child processes."
   (sb-sys:enable-interrupt sb-posix:sigchld

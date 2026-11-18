@@ -1,4 +1,4 @@
-;;;; src/font.lisp - TrueType Monospace Font Engine for LispOS using FreeType 2
+;;;; src/graphics/font.lisp - TrueType Monospace Font Engine for LispOS using FreeType 2
 
 (in-package :lispos.font)
 

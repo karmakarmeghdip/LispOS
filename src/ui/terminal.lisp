@@ -1,4 +1,4 @@
-;;;; src/terminal.lisp - Live Interactive Graphical Workspace for LispOS
+;;;; src/ui/terminal.lisp - Live Interactive Graphical Workspace for LispOS
 
 (in-package :lispos.terminal)
 
@@ -55,6 +55,8 @@
     (let ((shell-buf (lispos.buffer:create-buffer "*shell*"
                                                   :mode :shell
                                                   :engine (or engine (lispos.shell:make-shell-engine)))))
+      ;; Also pre-create *scratch* buffer in registry
+      (lispos.buffer:create-scratch-buffer)
       ;; 2. Initialize Tiling Window Tree Root (occupying full screen above modeline)
       (let ((root (lispos.window:make-window
                    :buffer shell-buf
@@ -63,7 +65,8 @@
                    :width w
                    :height workspace-h)))
         (setf lispos.window:*root-window* root
-              lispos.window:*focused-window* root)))
+              lispos.window:*focused-window* root
+              lispos.buffer:*current-buffer* shell-buf)))
 
     (setf *terminal*
           (make-terminal :engine (lispos.buffer:buffer-engine (lispos.window:window-buffer lispos.window:*focused-window*))
@@ -175,34 +178,76 @@
 
     ;; 2. Render Buffer Content
     (when buf
-      (let* ((lines (lispos.buffer:buffer-content-lines buf))
-             (num-lines (length lines))
-             (start-idx (max 0 (- num-lines max-lines)))
-             (visible-lines (subseq lines start-idx num-lines))
-             (cur-y (+ wy margin-y)))
+      (multiple-value-bind (cursor-row cursor-col) (lispos.buffer:buffer-cursor-position buf)
+        (let* ((lines (lispos.buffer:buffer-content-lines buf))
+               (num-lines (length lines))
+               (is-editor (typep buf 'lispos.buffer:editor-buffer))
+               (digits (if is-editor (max 2 (length (format nil "~D" num-lines))) 0))
+               (gutter-w (if is-editor (+ (* (+ digits 2) cw) 8) 0))
+               (text-x (+ wx margin-x gutter-w))
+               (start-idx
+                 (if (eq (lispos.buffer:buffer-mode buf) :shell)
+                     (max 0 (- num-lines max-lines))
+                     ;; Editor / generic buffer: adjust window scroll-row to keep cursor in view
+                     (progn
+                       (when (< cursor-row (lispos.window:window-scroll-row win))
+                         (setf (lispos.window:window-scroll-row win) cursor-row))
+                       (when (>= cursor-row (+ (lispos.window:window-scroll-row win) max-lines))
+                         (setf (lispos.window:window-scroll-row win) (1+ (- cursor-row max-lines))))
+                       (max 0 (min (lispos.window:window-scroll-row win) (max 0 (1- num-lines)))))))
+               (end-idx (min num-lines (+ start-idx max-lines)))
+               (cur-y (+ wy margin-y)))
 
-        ;; Draw buffer lines
-        (dolist (line visible-lines)
-          (render-output-line disp fnt (+ wx margin-x) cur-y line (- ww (* 2 margin-x)))
-          (incf cur-y lh))
+          ;; Draw lines with optional gutter and selection highlighting
+          (loop for line-idx from start-idx below end-idx do
+            (let ((line (nth line-idx lines)))
+              ;; Line number gutter for editor buffers
+              (when is-editor
+                (let ((is-cmd-line (and (eq (lispos.buffer:editor-buffer-helix-mode buf) :command)
+                                        (= line-idx (length (lispos.buffer:editor-buffer-lines buf))))))
+                  (if is-cmd-line
+                      ;; Blank gutter on command input line
+                      (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y
+                                             (make-string (+ digits 2) :initial-element #\Space)
+                                             #xFF585B70)
+                      (let* ((is-cur (= line-idx cursor-row))
+                             (ln-col (if (and is-cur focused-p) #xFFCDD6F4 #xFF585B70))
+                             (ln-str (format nil "~VD │" digits (1+ line-idx))))
+                        (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y ln-str ln-col)))))
 
-        ;; Draw Cursor if Focused
-        (when focused-p
-          (case (lispos.buffer:buffer-mode buf)
-            (:shell
-             (let ((eng (lispos.buffer:buffer-engine buf)))
-               (when eng
-                 (let* ((prompt (lispos.shell:engine-prompt eng))
-                        (point (lispos.shell:buffer-point eng))
-                        (buf-text (lispos.shell:buffer-text eng))
-                        (prompt-w (lispos.font:measure-text fnt prompt))
-                        (cursor-x (+ wx margin-x prompt-w (* point cw)))
-                        (cursor-y (- cur-y lh))
-                        (cursor-char (if (< point (length buf-text))
-                                         (char buf-text point)
-                                         #\Space)))
-                   (lispos.display:fill-rect disp cursor-x cursor-y cw lh +cursor-color+)
-                   (lispos.font:draw-char-at disp fnt cursor-x cursor-y cursor-char +cursor-fg+)))))))))))
+              ;; Visual selection highlight in :select mode
+              (when (and is-editor (eq (lispos.buffer:editor-buffer-helix-mode buf) :select))
+                (multiple-value-bind (s-row s-col e-row e-col) (lispos.buffer::%get-selection-bounds buf)
+                  (when (and (>= line-idx s-row) (<= line-idx e-row))
+                    (let* ((line-len (length line))
+                           (c-start (if (= line-idx s-row) s-col 0))
+                           (c-end (if (= line-idx e-row) (min (1+ e-col) (max 1 line-len)) (max 1 line-len)))
+                           (span (max 1 (- c-end c-start)))
+                           (hl-x (+ text-x (* c-start cw)))
+                           (hl-w (* span cw)))
+                      (lispos.display:fill-rect disp hl-x cur-y hl-w lh #xFF45475A)))))
+
+              ;; Draw line text
+              (render-output-line disp fnt text-x cur-y line (- ww margin-x gutter-w))
+              (incf cur-y lh)))
+
+          ;; Draw Cursor if Focused and in visible range
+          (when (and focused-p (>= cursor-row start-idx) (< cursor-row end-idx))
+            (let* ((vis-line-idx (- cursor-row start-idx))
+                   (cursor-y (+ wy margin-y (* vis-line-idx lh)))
+                   (cursor-x (+ text-x (* cursor-col cw)))
+                   (line (if (< cursor-row num-lines) (nth cursor-row lines) ""))
+                   (cursor-char (if (< cursor-col (length line))
+                                    (char line cursor-col)
+                                    #\Space))
+                   (is-insert (and is-editor (eq (lispos.buffer:editor-buffer-helix-mode buf) :insert))))
+              (if is-insert
+                  ;; Insert mode: 2px vertical bar cursor
+                  (lispos.display:fill-rect disp cursor-x cursor-y 2 lh +cursor-color+)
+                  ;; Normal / Command / Select / Shell mode: full block cursor
+                  (progn
+                    (lispos.display:fill-rect disp cursor-x cursor-y cw lh +cursor-color+)
+                    (lispos.font:draw-char-at disp fnt cursor-x cursor-y cursor-char +cursor-fg+))))))))))
 
 (defun render-picker-overlay (disp fnt picker)
   "Render centered floating modal fuzzy picker."
@@ -299,6 +344,25 @@
 (defun handle-os-command (cmd)
   "Execute an OS command from picker / shortcuts."
   (case cmd
+    (:scratch
+     (let ((buf (lispos.buffer:create-scratch-buffer)))
+       (when lispos.window:*focused-window*
+         (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
+         (setf lispos.buffer:*current-buffer* buf))))
+    (:find-file
+     (lispos.picker:open-file-picker
+      (lambda (path)
+        (when path
+          (let ((buf (lispos.buffer:open-file-in-buffer path)))
+            (when lispos.window:*focused-window*
+              (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
+              (setf lispos.buffer:*current-buffer* buf)))))))
+    (:switch-buffer
+     (lispos.picker:open-buffer-picker
+      (lambda (buf)
+        (when (and buf lispos.window:*focused-window*)
+          (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
+          (setf lispos.buffer:*current-buffer* buf)))))
     (:vsplit (lispos.window:split-window-vertically))
     (:hsplit (lispos.window:split-window-horizontally))
     (:close-win (lispos.window:close-window))
@@ -341,12 +405,10 @@
                (lispos.picker:open-file-picker
                 (lambda (file-path)
                   (when file-path
-                    (let ((buf (lispos.buffer:create-buffer
-                                (file-namestring file-path)
-                                :mode :file
-                                :file-path file-path)))
+                    (let ((buf (lispos.buffer:open-file-in-buffer file-path)))
                       (when lispos.window:*focused-window*
-                        (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf))))))
+                        (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
+                        (setf lispos.buffer:*current-buffer* buf))))))
                (render-terminal term)
                (lispos.display:present-display (terminal-display term)))
 

@@ -244,3 +244,71 @@
                    (format *error-output* "rm: cannot delete '~A': ~A~%" targ c))))))))
     nil))
 
+;;; ---------------------------------------------------------------------------
+;;; edit - Open File in Helix Modal Editor
+;;; ---------------------------------------------------------------------------
+
+(define-shell-command edit (engine &optional target &rest rest)
+  "Open file in Helix editor buffer (or open *scratch* if no file specified)."
+  (declare (ignore engine rest))
+  (let* ((buf-pkg (find-package :lispos.buffer))
+         (open-fn (and buf-pkg (find-symbol "OPEN-FILE-IN-BUFFER" buf-pkg)))
+         (scratch-fn (and buf-pkg (find-symbol "CREATE-SCRATCH-BUFFER" buf-pkg)))
+         (name-fn (and buf-pkg (find-symbol "BUFFER-NAME" buf-pkg)))
+         (cur-buf-sym (and buf-pkg (find-symbol "*CURRENT-BUFFER*" buf-pkg)))
+         (buf (if (and target (> (length target) 0))
+                  (let* ((resolved (resolve-path target))
+                         (path-str (namestring resolved)))
+                    (when open-fn (funcall open-fn path-str)))
+                  (when scratch-fn (funcall scratch-fn)))))
+    (when buf
+      (when cur-buf-sym
+        (setf (symbol-value cur-buf-sym) buf))
+      (let ((win-pkg (find-package :lispos.window)))
+        (when win-pkg
+          (let ((fwin (symbol-value (find-symbol "*FOCUSED-WINDOW*" win-pkg))))
+            (when fwin
+              (setf (slot-value fwin (find-symbol "BUFFER" win-pkg)) buf)))))
+      (let ((term-pkg (find-package :lispos.terminal)))
+        (when term-pkg
+          (let ((term (symbol-value (find-symbol "*TERMINAL*" term-pkg))))
+            (when term
+              (funcall (find-symbol "RENDER-TERMINAL" term-pkg) term)
+              (let ((disp-pkg (find-package :lispos.display)))
+                (when disp-pkg
+                  (funcall (find-symbol "PRESENT-DISPLAY" disp-pkg)
+                           (funcall (find-symbol "TERMINAL-DISPLAY" term-pkg) term))))))))
+      (format t "[Editing ~A]~%" (if name-fn (funcall name-fn buf) target)))
+    nil))
+
+;;; ---------------------------------------------------------------------------
+;;; scratch - Open or Switch to *scratch* Buffer
+;;; ---------------------------------------------------------------------------
+
+(define-shell-command scratch (engine &rest args)
+  "Open or switch to *scratch* interactive editor buffer."
+  (declare (ignore engine args))
+  (let* ((buf-pkg (find-package :lispos.buffer))
+         (scratch-fn (and buf-pkg (find-symbol "CREATE-SCRATCH-BUFFER" buf-pkg)))
+         (cur-buf-sym (and buf-pkg (find-symbol "*CURRENT-BUFFER*" buf-pkg)))
+         (buf (when scratch-fn (funcall scratch-fn))))
+    (when buf
+      (when cur-buf-sym
+        (setf (symbol-value cur-buf-sym) buf))
+      (let ((win-pkg (find-package :lispos.window)))
+        (when win-pkg
+          (let ((fwin (symbol-value (find-symbol "*FOCUSED-WINDOW*" win-pkg))))
+            (when fwin
+              (setf (slot-value fwin (find-symbol "BUFFER" win-pkg)) buf)))))
+      (let ((term-pkg (find-package :lispos.terminal)))
+        (when term-pkg
+          (let ((term (symbol-value (find-symbol "*TERMINAL*" term-pkg))))
+            (when term
+              (funcall (find-symbol "RENDER-TERMINAL" term-pkg) term)
+              (let ((disp-pkg (find-package :lispos.display)))
+                (when disp-pkg
+                  (funcall (find-symbol "PRESENT-DISPLAY" disp-pkg)
+                           (funcall (find-symbol "TERMINAL-DISPLAY" term-pkg) term))))))))
+      (format t "[Switched to *scratch*]~%"))
+    nil))
+

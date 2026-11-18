@@ -99,6 +99,8 @@
   (format t "   ls [-l] [-a] [path]  List directory contents~%")
   (format t "   cd [path]            Change working directory (updates prompt)~%")
   (format t "   pwd                  Print current working directory~%")
+  (format t "   edit [file]          Open file or *scratch* in Helix editor~%")
+  (format t "   scratch              Open or switch to *scratch* editor buffer~%")
   (format t "   cat <file...>        Display file contents~%")
   (format t "   echo [-n] <args...>  Print arguments~%")
   (format t "   touch <file...>      Create empty file or update timestamp~%")

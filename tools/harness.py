@@ -471,6 +471,25 @@ class SlynkClient:
                     stdout_accum.append(parts[1])
                 continue
 
+            # Handle unexpected SLDB debugger entry (e.g. reader error or unhandled condition)
+            if msg.startswith("(:debug"):
+                parts = msg.split(None, 3)
+                thread_id = parts[1] if len(parts) > 1 else "t"
+                cond = "SLDB debugger invoked"
+                if len(parts) > 3:
+                    cond_part = parts[3]
+                    if cond_part.startswith('"'):
+                        cond_end = cond_part.find('"', 1)
+                        if cond_end != -1:
+                            cond = cond_part[1:cond_end]
+                try:
+                    self.req_id += 1
+                    abort_req = f'(:emacs-rex (slynk:sldb-abort) "{package}" {thread_id} {self.req_id})\n'
+                    self._send_packet(abort_req)
+                except Exception:
+                    pass
+                return "".join(stdout_accum), f"[SLDB Condition] {cond}", True
+
             # Check for return message
             if msg.startswith("(:return"):
                 # Parse return message: (:return (:ok (output result)) id)
