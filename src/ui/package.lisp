@@ -70,6 +70,7 @@
    #:picker-item-subtitle
    #:picker-item-badge
    #:picker-item-value
+   #:picker-item-aliases
    #:picker
    #:picker-p
    #:make-picker
@@ -89,7 +90,8 @@
    #:fuzzy-match-score
    #:open-buffer-picker
    #:open-file-picker
-   #:open-command-palette))
+   #:open-command-palette
+   #:execute-palette-command))
 
 (defpackage :lispos.window
   (:use :cl)

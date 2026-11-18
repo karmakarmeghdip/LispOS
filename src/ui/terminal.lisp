@@ -232,17 +232,10 @@ Calls lispos.drm:set-mode, which notifies display & terminal resize hooks."
             (let ((line (nth line-idx lines)))
               ;; Line number gutter for editor buffers
               (when has-gutter
-                (let ((is-cmd-line (and (eq (lispos.buffer:editor-buffer-helix-mode buf) :command)
-                                        (= line-idx (length (lispos.buffer:editor-buffer-lines buf))))))
-                  (if is-cmd-line
-                      ;; Blank gutter on command input line
-                      (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y
-                                             (make-string (+ digits 2) :initial-element #\Space)
-                                             #xFF585B70)
-                      (let* ((is-cur (= line-idx cursor-row))
-                             (ln-col (if (and is-cur focused-p) #xFFCDD6F4 #xFF585B70))
-                             (ln-str (format nil "~VD │" digits (1+ line-idx))))
-                        (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y ln-str ln-col)))))
+                (let* ((is-cur (= line-idx cursor-row))
+                       (ln-col (if (and is-cur focused-p) #xFFCDD6F4 #xFF585B70))
+                       (ln-str (format nil "~VD │" digits (1+ line-idx))))
+                  (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y ln-str ln-col)))
 
               ;; Visual selection highlight in :select mode or when selection active
               (when (and (typep buf 'lispos.buffer:editor-buffer)
@@ -375,39 +368,7 @@ Calls lispos.drm:set-mode, which notifies display & terminal resize hooks."
 
 (defun handle-os-command (cmd)
   "Execute an OS command from picker / shortcuts."
-  (case cmd
-    (:scratch
-     (let ((buf (lispos.buffer:create-scratch-buffer)))
-       (when lispos.window:*focused-window*
-         (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
-         (setf lispos.buffer:*current-buffer* buf))))
-    (:find-file
-     (lispos.picker:open-file-picker
-      (lambda (path)
-        (when path
-          (let ((buf (lispos.buffer:open-file-in-buffer path)))
-            (when lispos.window:*focused-window*
-              (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
-              (setf lispos.buffer:*current-buffer* buf)))))))
-    (:switch-buffer
-     (lispos.picker:open-buffer-picker
-      (lambda (buf)
-        (when (and buf lispos.window:*focused-window*)
-          (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf)
-          (setf lispos.buffer:*current-buffer* buf)))))
-    (:vsplit (lispos.window:split-window-vertically))
-    (:hsplit (lispos.window:split-window-horizontally))
-    (:close-win (lispos.window:close-window))
-    (:new-shell
-     (let ((buf (lispos.buffer:create-buffer (format nil "*shell-~D*" (1+ (length (lispos.buffer:list-buffers)))) :mode :shell)))
-       (when lispos.window:*focused-window*
-         (setf (lispos.window:window-buffer lispos.window:*focused-window*) buf))))
-    (:reboot
-     (format t "[SYS] Rebooting system...~%")
-     (lispos.sys:reboot))
-    (:poweroff
-     (format t "[SYS] Powering off system...~%")
-     (lispos.sys:poweroff))))
+  (lispos.picker:execute-palette-command cmd))
 
 (defun terminal-handle-key (term key &key (char nil) (modifiers nil))
   "Global event router: handles Super shortcuts, active modal pickers, and buffer edits."

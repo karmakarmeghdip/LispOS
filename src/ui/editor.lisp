@@ -110,17 +110,11 @@
     (t        (code-char #xF09A8)))) ; text document 󰦨
 
 (defmethod buffer-content-lines ((buf editor-buffer))
-  (let ((base-lines (coerce (editor-buffer-lines buf) 'list)))
-    (if (eq (editor-buffer-helix-mode buf) :command)
-        (append base-lines (list (format nil ":~A" (editor-buffer-command-input buf))))
-        base-lines)))
+  (coerce (editor-buffer-lines buf) 'list))
 
 (defmethod buffer-cursor-position ((buf editor-buffer))
-  (if (eq (editor-buffer-helix-mode buf) :command)
-      (values (length (editor-buffer-lines buf))
-              (1+ (length (editor-buffer-command-input buf))))
-      (values (editor-buffer-cursor-row buf)
-              (editor-buffer-cursor-col buf))))
+  (values (editor-buffer-cursor-row buf)
+          (editor-buffer-cursor-col buf)))
 
 (defmethod buffer-modeline-details ((buf editor-buffer))
   (cond
@@ -1437,10 +1431,15 @@
          ((eq k #\o) (%open-line-below buf))
          ((eq k #\O) (%open-line-above buf))
 
-         ;; Command Mode: :
-         ((eq k #\:)
-          (setf (editor-buffer-helix-mode buf) :command
-                (editor-buffer-command-input buf) ""))
+         ;; Command Palette Picker: :
+         ((or (eq k #\:) (eq char #\:))
+          (if (fboundp (find-symbol "OPEN-COMMAND-PALETTE" :lispos.picker))
+              (funcall (find-symbol "OPEN-COMMAND-PALETTE" :lispos.picker)
+                       (lambda (cmd)
+                         (if (fboundp (find-symbol "EXECUTE-PALETTE-COMMAND" :lispos.picker))
+                             (funcall (find-symbol "EXECUTE-PALETTE-COMMAND" :lispos.picker) cmd buf)
+                             (%execute-helix-command buf (if (stringp cmd) cmd (string-downcase (symbol-name cmd)))))))
+              (setf (editor-buffer-status-message buf) "Command palette unavailable")))
 
          (t nil))))
 

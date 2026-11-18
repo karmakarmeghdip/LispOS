@@ -219,39 +219,57 @@
 ;;; ---------------------------------------------------------------------------
 
 (defun test-helix-command-mode-and-persistence ()
-  (def-test-group "5. Helix Command Mode & Disk Persistence"
+  (def-test-group "5. Helix Command Palette Modal & Disk Persistence (:w, :q, :wq)"
     (let* ((tmp-path (format nil "/tmp/lispos-test-file-~D.txt" (get-universal-time)))
            (fb (open-file-in-buffer tmp-path)))
       (assert-test (typep fb 'file-buffer) "open-file-in-buffer returns file-buffer instance")
       (assert-test (string= (buffer-file-path fb) tmp-path) "buffer-file-path matches")
 
+      ;; Type text in insert mode
       (buffer-handle-key fb #\i :char #\i)
       (loop for ch across "(defun test () 42)" do
         (buffer-handle-key fb ch :char ch))
       (buffer-handle-key fb :escape)
       (assert-test (buffer-modified-p fb) "buffer marked modified")
 
+      ;; 1. Press ':' in normal mode -> opens Command Palette modal
       (buffer-handle-key fb #\: :char #\:)
-      (assert-test (eq (editor-buffer-helix-mode fb) :command) "':' enters command mode")
-      (assert-test (string= (buffer-mode-name fb) "CMD") "mode name is CMD")
+      (assert-test (not (null lispos.picker:*active-picker*)) "':' opens command palette modal")
+      (assert-test (string= (lispos.picker:picker-title lispos.picker:*active-picker*) "Commands")
+                   "command palette title is Commands")
 
-      (buffer-handle-key fb #\w :char #\w)
-      (assert-test (string= (editor-buffer-command-input fb) "w") "command input contains 'w'")
-      (buffer-handle-key fb :return)
-
-      (assert-test (eq (editor-buffer-helix-mode fb) :normal) "command execution returns to :normal mode")
+      ;; 2. Alias 'w': matches :write save command as top hit
+      (lispos.picker:picker-handle-key lispos.picker:*active-picker* #\w :char #\w)
+      (assert-test (string= (lispos.picker:picker-filter lispos.picker:*active-picker*) "w")
+                   "picker filter contains 'w'")
+      (let ((top-item (first (lispos.picker:picker-filtered-items lispos.picker:*active-picker*))))
+        (assert-test (eq (lispos.picker:picker-item-value top-item) :write)
+                     "'w' top match is :write save command"))
+      ;; Press enter to save
+      (lispos.picker:picker-handle-key lispos.picker:*active-picker* :return)
+      (assert-test (null lispos.picker:*active-picker*) "picker closed after execution")
       (assert-test (not (buffer-modified-p fb)) "buffer marked unmodified after save")
-
       (assert-test (probe-file tmp-path) "file exists on disk")
       (let ((content (uiop:read-file-string tmp-path)))
         (assert-test (search "(defun test () 42)" content) "saved file content contains typed text"))
 
+      ;; 3. Alias 'wq': save and close
+      (buffer-handle-key fb #\a :char #\a)
+      (buffer-handle-key fb #\Space :char #\Space)
+      (buffer-handle-key fb :escape)
+      (assert-test (buffer-modified-p fb) "buffer modified after edit")
       (buffer-handle-key fb #\: :char #\:)
-      (buffer-handle-key fb #\q :char #\q)
-      (buffer-handle-key fb :return)
-      (assert-test (null (find-buffer (buffer-name fb))) ":q removed buffer from registry")
+      (assert-test (not (null lispos.picker:*active-picker*)) "':' opens command palette for :wq")
+      (lispos.picker:picker-handle-key lispos.picker:*active-picker* #\w :char #\w)
+      (lispos.picker:picker-handle-key lispos.picker:*active-picker* #\q :char #\q)
+      (let ((top-item (first (lispos.picker:picker-filtered-items lispos.picker:*active-picker*))))
+        (assert-test (eq (lispos.picker:picker-item-value top-item) :write-quit)
+                     "'wq' top match is :write-quit save & close command"))
+      (lispos.picker:picker-handle-key lispos.picker:*active-picker* :return)
+      (assert-test (null (find-buffer (buffer-name fb))) ":wq saved and removed buffer from registry")
 
-      (delete-file tmp-path))))
+      (when (probe-file tmp-path)
+        (delete-file tmp-path)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; 6. Helix Selection Mode (v, x, X, %, ;, Alt-;, motions, y, d, c)
