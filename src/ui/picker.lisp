@@ -86,8 +86,8 @@
   (let* ((filtered (picker-filtered-items picker))
          (count (length filtered)))
     (cond
-      ;; Escape / C-g closes picker
-      ((or (eq key :escape) (eq key :ctrl-g) (eq char #\Esc))
+      ;; Escape / C-g / C-c closes picker
+      ((or (eq key :escape) (eq key :ctrl-g) (eq key :ctrl-c) (eq char #\Esc))
        (close-picker)
        t)
 
@@ -109,12 +109,15 @@
        (let ((callback (picker-on-select picker)))
          (close-picker)
          (when callback
-           (if (and (> count 0) (< (picker-selected-index picker) count))
-               (let ((selected (nth (picker-selected-index picker) filtered)))
-                 (funcall callback (picker-item-value selected)))
-               ;; If user typed a custom filename or input that didn't match
-               (when (> (length (picker-filter picker)) 0)
-                 (funcall callback (picker-filter picker))))))
+           (handler-case
+               (if (and (> count 0) (< (picker-selected-index picker) count))
+                   (let ((selected (nth (picker-selected-index picker) filtered)))
+                     (funcall callback (picker-item-value selected)))
+                   ;; If user typed a custom filename or input that didn't match
+                   (when (> (length (picker-filter picker)) 0)
+                     (funcall callback (picker-filter picker))))
+             (error (c)
+               (format t "[PICKER Error] Selection callback error: ~A~%" c)))))
        t)
 
       ;; Backspace removes filter character

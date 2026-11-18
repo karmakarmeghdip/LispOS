@@ -18,12 +18,14 @@
    #:buffer-content-lines
    #:buffer-cursor-position
    #:buffer-mode-name
+   #:buffer-mode-icon
    #:buffer-handle-key
    #:buffer-modeline-details
    #:save-buffer
 
    ;; Concrete Buffer Classes
    #:shell-buffer
+   #:shell-buffer-engine
    #:editor-buffer
    #:file-buffer
    #:scratch-buffer
@@ -38,6 +40,8 @@
    #:editor-buffer-clipboard
    #:editor-buffer-selection-anchor-row
    #:editor-buffer-selection-anchor-col
+   #:editor-buffer-selection-end-row
+   #:editor-buffer-selection-end-col
    #:editor-buffer-undo-stack
    #:editor-buffer-redo-stack
    #:editor-buffer-leader-active-p
@@ -132,6 +136,8 @@
    #:terminal-display
    #:terminal-active-picker
    #:init-terminal
+   #:resize-terminal
+   #:set-resolution
    #:render-terminal
    #:terminal-handle-key
    #:terminal-event-loop

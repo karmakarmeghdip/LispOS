@@ -64,6 +64,11 @@ and col is 0-indexed character offset within that line."))
 (defgeneric buffer-mode-name (buffer)
   (:documentation "Return short status string representing active mode (e.g. 'NOR', 'INS', 'SHELL')."))
 
+(defgeneric buffer-mode-icon (buffer)
+  (:documentation "Return character icon representing active buffer mode.")
+  (:method ((buf buffer))
+    (code-char #xF09A8)))
+
 (defgeneric buffer-handle-key (buffer key &key char modifiers)
   (:documentation "Handle raw keystroke dispatched from window/event loop."))
 
@@ -114,96 +119,14 @@ and col is 0-indexed character offset within that line."))
           (setf *current-buffer* replacement))
         ;; Safely update any window displaying the killed buffer
         (ignore-errors
-         (let ((all-leaves-fn (find-symbol "ALL-LEAF-WINDOWS" :lispos.window))
-               (win-buf-fn (find-symbol "WINDOW-BUFFER" :lispos.window)))
-           (when (and all-leaves-fn (fboundp all-leaves-fn) win-buf-fn)
+         (let ((all-leaves-fn (find-symbol "ALL-LEAF-WINDOWS" :lispos.window)))
+           (when (and all-leaves-fn (fboundp all-leaves-fn))
              (dolist (win (funcall all-leaves-fn))
-               (when (eq (funcall win-buf-fn win) buf)
-                 (setf (slot-value win (find-symbol "BUFFER" :lispos.window)) replacement
-                       (slot-value win (find-symbol "SCROLL-ROW" :lispos.window)) 0
-                       (slot-value win (find-symbol "SCROLL-COL" :lispos.window)) 0))))))
+               (when (eq (lispos.window:window-buffer win) buf)
+                 (setf (lispos.window:window-buffer win) replacement
+                       (lispos.window:window-scroll-row win) 0
+                       (lispos.window:window-scroll-col win) 0))))))
         t))))
-
-;;; ---------------------------------------------------------------------------
-;;; Concrete Subclass: Shell Buffer
-;;; ---------------------------------------------------------------------------
-
-(defclass shell-buffer (buffer)
-  ((engine
-    :initarg :engine
-    :initform nil
-    :accessor shell-buffer-engine
-    :documentation "Underlying shell-engine instance."))
-  (:default-initargs :name "*shell*")
-  (:documentation "Buffer hosting an interactive LispOS shell REPL session."))
-
-(defmethod initialize-instance :after ((buf shell-buffer) &key &allow-other-keys)
-  (unless (shell-buffer-engine buf)
-    (setf (shell-buffer-engine buf) (lispos.shell:make-shell-engine))))
-
-(defmethod buffer-engine ((buf shell-buffer))
-  (shell-buffer-engine buf))
-
-(defmethod buffer-mode ((buf shell-buffer))
-  :shell)
-
-(defmethod buffer-mode-name ((buf shell-buffer))
-  "SHELL")
-
-(defmethod buffer-content-lines ((buf shell-buffer))
-  (let ((eng (shell-buffer-engine buf)))
-    (if eng
-        (let* ((history (lispos.shell:output-history-lines eng))
-               (prompt (lispos.shell:engine-prompt eng))
-               (buf-text (lispos.shell:buffer-text eng))
-               (current-line (concatenate 'string prompt buf-text)))
-          (append history (list current-line)))
-        '(""))))
-
-(defmethod buffer-cursor-position ((buf shell-buffer))
-  (let ((eng (shell-buffer-engine buf)))
-    (if eng
-        (let* ((history-count (length (lispos.shell:output-history-lines eng)))
-               (prompt-len (length (lispos.shell:engine-prompt eng)))
-               (point (lispos.shell:buffer-point eng)))
-          (values history-count (+ prompt-len point)))
-        (values 0 0))))
-
-(defmethod buffer-handle-key ((buf shell-buffer) key &key (char nil) (modifiers nil))
-  (let ((eng (shell-buffer-engine buf)))
-    (when eng
-      (let ((effective-key
-              (cond
-                ((and (member :ctrl modifiers) (characterp (or char key)))
-                 (let ((c (char-upcase (or char key))))
-                   (case c
-                     (#\A :ctrl-a)
-                     (#\B :ctrl-b)
-                     (#\C :ctrl-c)
-                     (#\D :ctrl-d)
-                     (#\E :ctrl-e)
-                     (#\F :ctrl-f)
-                     (#\K :ctrl-k)
-                     (#\L :ctrl-l)
-                     (#\N :ctrl-n)
-                     (#\P :ctrl-p)
-                     (#\U :ctrl-u)
-                     (t key))))
-                (t (or char key)))))
-        (lispos.shell:handle-key eng effective-key)))))
-
-(defmethod buffer-modeline-details ((buf shell-buffer))
-  (let* ((cwd (or (ignore-errors (lispos.shell:get-cwd-namestring)) "~"))
-         (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
-         (clean-home (if (and admin-home (> (length admin-home) 1)
-                              (char= (char admin-home (1- (length admin-home))) #\/))
-                         (subseq admin-home 0 (1- (length admin-home)))
-                         admin-home)))
-    (cond
-      ((or (string= cwd clean-home) (string= cwd "/Users/Admin") (string= cwd "/Users/Admin/")) "~")
-      ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
-       (concatenate 'string "~" (subseq cwd (length clean-home))))
-      (t cwd))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Factory Helper (Backward-Compatible)
@@ -215,16 +138,24 @@ If a buffer with NAME already exists, returns it."
   (let ((existing (find-buffer name)))
     (if existing
         existing
-        (let ((buf (case mode
-                     (:shell
-                      (make-instance 'shell-buffer
-                                     :name name
-                                     :engine (or engine (lispos.shell:make-shell-engine))))
-                     (otherwise
-                      ;; If editor classes are loaded, instantiated via editor-buffer / file-buffer
-                      (if (find-class 'file-buffer nil)
-                          (if file-path
-                              (make-instance 'file-buffer :name name :file-path file-path)
-                              (make-instance 'editor-buffer :name name))
-                          (make-instance 'shell-buffer :name name))))))
+        (let* ((shell-cls (find-class 'shell-buffer nil))
+               (file-cls (find-class 'file-buffer nil))
+               (editor-cls (find-class 'editor-buffer nil))
+               (buf (case mode
+                      (:shell
+                       (if shell-cls
+                           (make-instance shell-cls
+                                          :name name
+                                          :engine (or engine (lispos.shell:make-shell-engine)))
+                           (make-instance 'buffer :name name)))
+                      (otherwise
+                       (cond
+                         ((and file-cls file-path)
+                          (make-instance file-cls :name name :file-path file-path))
+                         (editor-cls
+                          (make-instance editor-cls :name name))
+                         (shell-cls
+                          (make-instance shell-cls :name name))
+                         (t
+                          (make-instance 'buffer :name name)))))))
           (register-buffer buf)))))

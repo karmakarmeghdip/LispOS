@@ -69,8 +69,9 @@
 (defun test-shell-buffer-protocol ()
   (def-test-group "2. Shell Buffer Protocol"
     (let ((sh (make-instance 'shell-buffer :name "*shell*")))
-      (assert-test (string= (buffer-mode-name sh) "SHELL") "buffer-mode-name is SHELL")
+      (assert-test (string= (buffer-mode-name sh) "INS") "buffer-mode-name is INS")
       (assert-test (eq (buffer-mode sh) :shell) "buffer-mode is :shell")
+      (assert-test (eq (buffer-mode-icon sh) (code-char #xF448)) "buffer-mode-icon is pencil in insert mode")
       (assert-test (consp (buffer-content-lines sh)) "buffer-content-lines returns list")
 
       (multiple-value-bind (r c) (buffer-cursor-position sh)
@@ -150,14 +151,17 @@
       (assert-test (= (editor-buffer-cursor-col ed) 4) "'w' jumps to next word 'quick' (col 4)")
       (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'w' stays in :normal mode")
       (assert-test (= (editor-buffer-selection-anchor-col ed) 0) "'w' sets selection anchor to previous col 0")
+      (assert-test (= (editor-buffer-selection-end-col ed) 3) "'w' sets head-exclusive end col to 3")
 
       (buffer-handle-key ed #\w :char #\w)
       (assert-test (= (editor-buffer-cursor-col ed) 10) "'w' jumps to 'brown' (col 10)")
       (assert-test (= (editor-buffer-selection-anchor-col ed) 4) "'w' replaces selection anchor with previous col 4")
+      (assert-test (= (editor-buffer-selection-end-col ed) 9) "'w' sets head-exclusive end col to 9")
 
       (buffer-handle-key ed #\b :char #\b)
       (assert-test (= (editor-buffer-cursor-col ed) 4) "'b' jumps back to 'quick' (col 4)")
-      (assert-test (= (editor-buffer-selection-anchor-col ed) 10) "'b' transiently selects from 10 back to 4")
+      (assert-test (= (editor-buffer-selection-anchor-col ed) 4) "'b' sets selection anchor to col 4")
+      (assert-test (= (editor-buffer-selection-end-col ed) 9) "'b' sets selection end to col 9 (excluding col 10)")
 
       ;; Single-step motion in normal mode cancels selection
       (buffer-handle-key ed #\l :char #\l)
@@ -468,6 +472,157 @@
       (assert-test (search "third line" (aref (editor-buffer-lines ed) 1)) "joined content includes next line"))))
 
 ;;; ---------------------------------------------------------------------------
+;;; 12. Word Motions with Symbols & Head-Exclusive Deletion
+;;; ---------------------------------------------------------------------------
+
+(defun test-word-motions-and-del-discrepancies ()
+  (def-test-group "12. Word Motions with Symbols & Head-Exclusive Deletion"
+    ;; 1. Hopping over symbols and punctuation: (hello "world") (+ 1 2)
+    (let ((ed (make-instance 'editor-buffer :name "*test*")))
+      (setf (editor-buffer-lines ed)
+            (make-array 1 :adjustable t :fill-pointer 1
+                        :initial-contents (list "(hello \"world\") (+ 1 2)"))
+            (editor-buffer-cursor-row ed) 0
+            (editor-buffer-cursor-col ed) 0)
+
+      ;; Start at col 0 '('
+      (assert-test (= (editor-buffer-cursor-col ed) 0) "start at col 0 '('")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 1) "'w' from '(' hops to 'h' (col 1)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 7) "'w' from 'hello' hops to '\"' (col 7)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 8) "'w' from '\"' hops to 'w' (col 8)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 13) "'w' from 'world' hops to '\")' (col 13)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 16) "'w' from '\")' hops to '(+' (col 16)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 19) "'w' from '(+' hops to '1' (col 19)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 21) "'w' from '1' hops to '2' (col 21)")
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 22) "'w' from '2' hops to ')' (col 22)")
+
+      ;; 2. Backward 'b' motion across symbols
+      (buffer-handle-key ed #\b :char #\b)
+      (assert-test (= (editor-buffer-cursor-col ed) 21) "'b' from ')' hops to '2' (col 21)")
+      (buffer-handle-key ed #\b :char #\b)
+      (assert-test (= (editor-buffer-cursor-col ed) 19) "'b' from '2' hops to '1' (col 19)")
+      (buffer-handle-key ed #\b :char #\b)
+      (assert-test (= (editor-buffer-cursor-col ed) 16) "'b' from '1' hops to '(+' (col 16)")
+      (buffer-handle-key ed #\b :char #\b)
+      (assert-test (= (editor-buffer-cursor-col ed) 13) "'b' from '(+' hops to '\")' (col 13)")
+
+      ;; 3. Deletion with 'd' does NOT delete first character of next word!
+      (setf (editor-buffer-lines ed)
+            (make-array 1 :adjustable t :fill-pointer 1
+                        :initial-contents (list "hello world"))
+            (editor-buffer-cursor-row ed) 0
+            (editor-buffer-cursor-col ed) 0)
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 6) "cursor is on 'w' of world (col 6)")
+      (assert-test (= (editor-buffer-selection-end-col ed) 5) "selection end col is 5 (space before 'w')")
+      (buffer-handle-key ed #\d :char #\d)
+      (assert-test (string= (aref (editor-buffer-lines ed) 0) "world") "'wd' deletes 'hello ' preserving 'world'")
+      (assert-test (= (editor-buffer-cursor-col ed) 0) "cursor is at col 0 ('w' of 'world')")
+
+      ;; 4. Change with 'c' deletes word and enters insert mode
+      (setf (editor-buffer-lines ed)
+            (make-array 1 :adjustable t :fill-pointer 1
+                        :initial-contents (list "first second"))
+            (editor-buffer-cursor-row ed) 0
+            (editor-buffer-cursor-col ed) 0)
+      (buffer-handle-key ed #\w :char #\w)
+      (assert-test (= (editor-buffer-cursor-col ed) 6) "cursor at 'second'")
+      (buffer-handle-key ed #\c :char #\c)
+      (assert-test (string= (aref (editor-buffer-lines ed) 0) "second") "'wc' deleted 'first ' leaving 'second'")
+      (assert-test (eq (editor-buffer-helix-mode ed) :insert) "'c' entered :insert mode"))))
+
+;;; ---------------------------------------------------------------------------
+;;; 13. Terminal Shell Buffer Helix Modal Scrollback & Clipboard
+;;; ---------------------------------------------------------------------------
+
+(defun test-shell-buffer-helix-scrollback ()
+  (def-test-group "13. Terminal Shell Buffer Helix Modal Scrollback & Clipboard"
+    (let ((sh (make-instance 'shell-buffer :name "*test-shell*")))
+      ;; Initial state: starts in :insert mode
+      (assert-test (eq (editor-buffer-helix-mode sh) :insert) "shell-buffer starts in :insert mode")
+      (assert-test (string= (buffer-mode-name sh) "INS") "mode name is INS")
+      (assert-test (eq (buffer-mode-icon sh) (code-char #xF448)) "mode icon is pencil (0xF448)")
+
+      ;; Type input and execute command
+      (buffer-handle-key sh #\( :char #\()
+      (buffer-handle-key sh #\+ :char #\+)
+      (buffer-handle-key sh #\Space :char #\Space)
+      (buffer-handle-key sh #\1 :char #\1)
+      (buffer-handle-key sh #\0 :char #\0)
+      (buffer-handle-key sh #\Space :char #\Space)
+      (buffer-handle-key sh #\2 :char #\2)
+      (buffer-handle-key sh #\0 :char #\0)
+      (buffer-handle-key sh #\) :char #\))
+      (buffer-handle-key sh :enter)
+
+      (let ((lines (buffer-content-lines sh)))
+        (assert-test (> (length lines) 1) "shell buffer has output lines after evaluation")
+        (assert-test (some (lambda (l) (search "30" l)) lines) "output history contains 30"))
+
+      ;; Press Escape -> transitions to :normal mode
+      (buffer-handle-key sh :escape)
+      (assert-test (eq (editor-buffer-helix-mode sh) :normal) "Escape transitions shell-buffer to :normal mode")
+      (assert-test (string= (buffer-mode-name sh) "NOR") "mode name is NOR")
+      (assert-test (eq (buffer-mode-icon sh) (code-char #xF09A8)) "mode icon is document (0xF09A8)")
+
+      ;; Navigate into scrollback with 'k'
+      (let ((prompt-row (editor-buffer-cursor-row sh)))
+        (buffer-handle-key sh #\k :char #\k)
+        (assert-test (< (editor-buffer-cursor-row sh) prompt-row) "'k' moved cursor up into scrollback history")
+
+        ;; Select line in scrollback with 'x'
+        (buffer-handle-key sh #\x :char #\x)
+        (assert-test (eq (editor-buffer-helix-mode sh) :normal) "'x' in scrollback keeps :normal mode")
+        (assert-test (numberp (editor-buffer-selection-anchor-row sh)) "'x' activated line selection in scrollback")
+
+        ;; Yank line with 'y'
+        (buffer-handle-key sh #\y :char #\y)
+        (assert-test (> (length (editor-buffer-clipboard sh)) 0) "'y' yanked scrollback line into clipboard")
+
+        ;; Scrollback lines are read-only: 'd' will not delete history
+        (let ((before-count (length (editor-buffer-lines sh))))
+          (buffer-handle-key sh #\d :char #\d)
+          (assert-test (= (length (editor-buffer-lines sh)) before-count) "'d' on scrollback is blocked (read-only)")
+          (assert-test (search "read-only" (editor-buffer-status-message sh)) "status message warns scrollback is read-only"))
+
+        ;; Paste with 'p' pastes clipboard into active prompt line!
+        (buffer-handle-key sh #\p :char #\p)
+        (let* ((lines (buffer-content-lines sh))
+               (last-l (first (last lines))))
+          (assert-test (search (string-trim '(#\Newline #\Return) (editor-buffer-clipboard sh)) last-l)
+                       "'p' pasted clipboard text into shell prompt"))
+
+        ;; Press 'i' jumps cursor to prompt line in :insert mode
+        (buffer-handle-key sh #\i :char #\i)
+        (assert-test (eq (editor-buffer-helix-mode sh) :insert) "'i' transitioned back to :insert mode")
+        (assert-test (= (editor-buffer-cursor-row sh) (1- (length (buffer-content-lines sh))))
+                     "cursor jumped back to prompt line")))))
+
+;;; ---------------------------------------------------------------------------
+;;; 14. Minimal Modeline & Nerd Font Icons
+;;; ---------------------------------------------------------------------------
+
+(defun test-minimal-modeline-and-icons ()
+  (def-test-group "14. Minimal Modeline & Nerd Font Icons"
+    (let ((ed (make-instance 'editor-buffer :name "test.lisp")))
+      ;; Normal mode: document icon 0xF09A8
+      (assert-test (eq (buffer-mode-icon ed) (code-char #xF09A8)) "normal mode icon is document (0xF09A8)")
+      ;; Insert mode: pencil icon 0xF448
+      (setf (editor-buffer-helix-mode ed) :insert)
+      (assert-test (eq (buffer-mode-icon ed) (code-char #xF448)) "insert mode icon is pencil (0xF448)")
+      ;; Select mode: I-beam icon 0xF246
+      (setf (editor-buffer-helix-mode ed) :select)
+      (assert-test (eq (buffer-mode-icon ed) (code-char #xF246)) "select mode icon is I-beam (0xF246)"))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Runner
 ;;; ---------------------------------------------------------------------------
 
@@ -489,6 +644,9 @@
   (test-scratch-buffer-flow)
   (test-shell-commands)
   (test-helix-advanced-features)
+  (test-word-motions-and-del-discrepancies)
+  (test-shell-buffer-helix-scrollback)
+  (test-minimal-modeline-and-icons)
 
   (format t "~%================================================================~%")
   (format t " Test Results Summary: ~D Passed, ~D Failed.~%" *test-passes* *test-failures*)

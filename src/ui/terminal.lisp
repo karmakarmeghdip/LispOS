@@ -81,7 +81,7 @@
     *terminal*))
 
 (defun render-unified-modeline (term)
-  "Render single unified modeline at the bottom of the screen matching Emacs/Doom desktop style."
+  "Render minimal unified modeline at the bottom: <mode-icon>  <file-or-buffer-name>."
   (let* ((disp (terminal-display term))
          (fnt (terminal-font term))
          (w (lispos.display:display-width disp))
@@ -89,43 +89,31 @@
          (mh (terminal-modeline-height term))
          (my (- h mh))
          (ty (+ my 4))
-         ;; Left title: current path / buffer
-         (left-title (lispos.window:active-window-modeline-info))
-         ;; Center clock: HH:MM:SS
-         (clock-text (multiple-value-bind (s m hr) (decode-universal-time (get-universal-time))
-                       (format nil "~2,'0D:~2,'0D:~2,'0D" hr m s)))
-         (clock-w (lispos.font:measure-text fnt clock-text))
-         (clock-x (round (- w clock-w) 2))
-         ;; Right system status indicators: Bluetooth, Wi-Fi, Battery
-         (bt-icon (string (code-char #xF293)))
-         (wifi-icon (string (code-char #xF1EB)))
-         (bat-icon (string (code-char #xF0079)))
-         (bat-pct " 100%")
-         (spacer "  ")
-         (total-right-w (+ (lispos.font:measure-text fnt bt-icon)
-                           (lispos.font:measure-text fnt spacer)
-                           (lispos.font:measure-text fnt wifi-icon)
-                           (lispos.font:measure-text fnt spacer)
-                           (lispos.font:measure-text fnt bat-icon)
-                           (lispos.font:measure-text fnt bat-pct)))
-         (rx (- w total-right-w 16)))
+         (win lispos.window:*focused-window*)
+         (buf (and win (lispos.window:window-buffer win))))
     ;; Background and top border line
     (lispos.display:fill-rect disp 0 my w mh +modeline-bg+)
     (lispos.display:fill-rect disp 0 my w 1 +win-border+)
 
-    ;; 1. Left: Active buffer / path title
-    (lispos.font:draw-text disp fnt 16 ty left-title +modeline-fg+)
-
-    ;; 2. Center: Clock HH:MM:SS
-    (lispos.font:draw-text disp fnt clock-x ty clock-text #xFFBAC2DE)
-
-    ;; 3. Right: Bluetooth, Wi-Fi, Battery
-    (setf rx (lispos.font:draw-text disp fnt rx ty bt-icon #xFFCDD6F4))
-    (setf rx (lispos.font:draw-text disp fnt rx ty spacer #xFFCDD6F4))
-    (setf rx (lispos.font:draw-text disp fnt rx ty wifi-icon #xFFCDD6F4))
-    (setf rx (lispos.font:draw-text disp fnt rx ty spacer #xFFCDD6F4))
-    (setf rx (lispos.font:draw-text disp fnt rx ty bat-icon #xFFA6E3A1))
-    (lispos.font:draw-text disp fnt rx ty bat-pct #xFFA6E3A1)))
+    (when buf
+      (let* ((icon-char (lispos.buffer:buffer-mode-icon buf))
+             (mode-color (if (typep buf 'lispos.buffer:editor-buffer)
+                             (case (lispos.buffer:editor-buffer-helix-mode buf)
+                               (:insert #xFFA6E3A1) ; green for insert
+                               (:select #xFFF9E2AF) ; yellow for select
+                               (:command #xFFF38BA8); peach for command
+                               (t #xFF89B4FA))      ; blue for normal
+                             #xFF89B4FA))
+             (name (lispos.buffer:buffer-name buf))
+             (mod-str (if (lispos.buffer:buffer-modified-p buf) " *" ""))
+             (title (concatenate 'string name mod-str))
+             (cur-x 16))
+        ;; 1. Mode icon in semantic color
+        (setf cur-x (lispos.font:draw-text disp fnt cur-x ty (string icon-char) mode-color))
+        ;; 2. Separator space
+        (setf cur-x (lispos.font:draw-text disp fnt cur-x ty "  " +modeline-fg+))
+        ;; 3. File / buffer name
+        (lispos.font:draw-text disp fnt cur-x ty title +modeline-fg+)))))
 
 (defun render-output-line (disp fnt x y line-text max-w)
   "Draw a single line of output with semantic syntax coloring."
@@ -181,20 +169,18 @@
       (multiple-value-bind (cursor-row cursor-col) (lispos.buffer:buffer-cursor-position buf)
         (let* ((lines (lispos.buffer:buffer-content-lines buf))
                (num-lines (length lines))
-               (is-editor (typep buf 'lispos.buffer:editor-buffer))
-               (digits (if is-editor (max 2 (length (format nil "~D" num-lines))) 0))
-               (gutter-w (if is-editor (+ (* (+ digits 2) cw) 8) 0))
+               (has-gutter (and (typep buf 'lispos.buffer:editor-buffer)
+                                (not (typep buf 'lispos.buffer:shell-buffer))))
+               (digits (if has-gutter (max 2 (length (format nil "~D" num-lines))) 0))
+               (gutter-w (if has-gutter (+ (* (+ digits 2) cw) 8) 0))
                (text-x (+ wx margin-x gutter-w))
                (start-idx
-                 (if (eq (lispos.buffer:buffer-mode buf) :shell)
-                     (max 0 (- num-lines max-lines))
-                     ;; Editor / generic buffer: adjust window scroll-row to keep cursor in view
-                     (progn
-                       (when (< cursor-row (lispos.window:window-scroll-row win))
-                         (setf (lispos.window:window-scroll-row win) cursor-row))
-                       (when (>= cursor-row (+ (lispos.window:window-scroll-row win) max-lines))
-                         (setf (lispos.window:window-scroll-row win) (1+ (- cursor-row max-lines))))
-                       (max 0 (min (lispos.window:window-scroll-row win) (max 0 (1- num-lines)))))))
+                 (progn
+                   (when (< cursor-row (lispos.window:window-scroll-row win))
+                     (setf (lispos.window:window-scroll-row win) cursor-row))
+                   (when (>= cursor-row (+ (lispos.window:window-scroll-row win) max-lines))
+                     (setf (lispos.window:window-scroll-row win) (1+ (- cursor-row max-lines))))
+                   (max 0 (min (lispos.window:window-scroll-row win) (max 0 (1- num-lines))))))
                (end-idx (min num-lines (+ start-idx max-lines)))
                (cur-y (+ wy margin-y)))
 
@@ -202,7 +188,7 @@
           (loop for line-idx from start-idx below end-idx do
             (let ((line (nth line-idx lines)))
               ;; Line number gutter for editor buffers
-              (when is-editor
+              (when has-gutter
                 (let ((is-cmd-line (and (eq (lispos.buffer:editor-buffer-helix-mode buf) :command)
                                         (= line-idx (length (lispos.buffer:editor-buffer-lines buf))))))
                   (if is-cmd-line
@@ -216,7 +202,7 @@
                         (lispos.font:draw-text disp fnt (+ wx margin-x) cur-y ln-str ln-col)))))
 
               ;; Visual selection highlight in :select mode or when selection active
-              (when (and is-editor
+              (when (and (typep buf 'lispos.buffer:editor-buffer)
                          (or (eq (lispos.buffer:editor-buffer-helix-mode buf) :select)
                              (lispos.buffer:editor-buffer-selection-anchor-row buf)))
                 (multiple-value-bind (s-row s-col e-row e-col) (lispos.buffer::%get-selection-bounds buf)
@@ -242,7 +228,8 @@
                    (cursor-char (if (< cursor-col (length line))
                                     (char line cursor-col)
                                     #\Space))
-                   (is-insert (and is-editor (eq (lispos.buffer:editor-buffer-helix-mode buf) :insert))))
+                   (is-insert (and (typep buf 'lispos.buffer:editor-buffer)
+                                   (eq (lispos.buffer:editor-buffer-helix-mode buf) :insert))))
               (if is-insert
                   ;; Insert mode: 2px vertical bar cursor
                   (lispos.display:fill-rect disp cursor-x cursor-y 2 lh +cursor-color+)

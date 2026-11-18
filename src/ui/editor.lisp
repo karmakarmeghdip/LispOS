@@ -41,6 +41,16 @@
     :accessor editor-buffer-selection-anchor-col
     :type (or null fixnum)
     :documentation "Col where visual selection began, or NIL if inactive.")
+   (selection-end-row
+    :initform nil
+    :accessor editor-buffer-selection-end-row
+    :type (or null fixnum)
+    :documentation "Row where visual selection ends (if head-exclusive/explicit), or NIL.")
+   (selection-end-col
+    :initform nil
+    :accessor editor-buffer-selection-end-col
+    :type (or null fixnum)
+    :documentation "Col where visual selection ends (if head-exclusive/explicit), or NIL.")
    (command-input
     :initform ""
     :accessor editor-buffer-command-input
@@ -92,6 +102,12 @@
     (:command "CMD")
     (:select  "SEL")
     (t        "EDT")))
+
+(defmethod buffer-mode-icon ((buf editor-buffer))
+  (case (editor-buffer-helix-mode buf)
+    (:insert  (code-char #xF448))    ; pencil 
+    (:select  (code-char #xF246))    ; I-beam 
+    (t        (code-char #xF09A8)))) ; text document 󰦨
 
 (defmethod buffer-content-lines ((buf editor-buffer))
   (let ((base-lines (coerce (editor-buffer-lines buf) 'list)))
@@ -186,11 +202,11 @@
   "Return (values start-row start-col end-row end-col) ordered."
   (let ((ar (or (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)))
         (ac (or (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
-        (cr (editor-buffer-cursor-row buf))
-        (cc (editor-buffer-cursor-col buf)))
-    (if (or (< ar cr) (and (= ar cr) (<= ac cc)))
-        (values ar ac cr cc)
-        (values cr cc ar ac))))
+        (er (or (editor-buffer-selection-end-row buf) (editor-buffer-cursor-row buf)))
+        (ec (or (editor-buffer-selection-end-col buf) (editor-buffer-cursor-col buf))))
+    (if (or (< ar er) (and (= ar er) (<= ac ec)))
+        (values ar ac er ec)
+        (values er ec ar ac))))
 
 (defun %extract-selection-text (buf)
   "Extract text in selection bounds as a string."
@@ -288,6 +304,8 @@
   (setf (editor-buffer-helix-mode buf) :normal
         (editor-buffer-selection-anchor-row buf) nil
         (editor-buffer-selection-anchor-col buf) nil
+        (editor-buffer-selection-end-row buf) nil
+        (editor-buffer-selection-end-col buf) nil
         (buffer-modified-p buf) t)
   (%clamp-cursor buf))
 
@@ -308,12 +326,16 @@
     (setf (editor-buffer-helix-mode buf) :normal
           (editor-buffer-selection-anchor-row buf) nil
           (editor-buffer-selection-anchor-col buf) nil
+          (editor-buffer-selection-end-row buf) nil
+          (editor-buffer-selection-end-col buf) nil
           (editor-buffer-status-message buf) "[Yanked selection]")))
 
 (defun %collapse-selection (buf)
   "Helix `;`: Collapse selection onto a single cursor point."
   (setf (editor-buffer-selection-anchor-row buf) nil
         (editor-buffer-selection-anchor-col buf) nil
+        (editor-buffer-selection-end-row buf) nil
+        (editor-buffer-selection-end-col buf) nil
         (editor-buffer-helix-mode buf) :normal
         (editor-buffer-status-message buf) "[Collapsed selection]"))
 
@@ -328,7 +350,9 @@
       (setf (editor-buffer-cursor-row buf) ar
             (editor-buffer-cursor-col buf) ac
             (editor-buffer-selection-anchor-row buf) cr
-            (editor-buffer-selection-anchor-col buf) cc)
+            (editor-buffer-selection-anchor-col buf) cc
+            (editor-buffer-selection-end-row buf) nil
+            (editor-buffer-selection-end-col buf) nil)
       (%clamp-cursor buf)
       (setf (editor-buffer-status-message buf) "[Flipped selection]"))))
 
@@ -337,6 +361,8 @@
   (let* ((lines (editor-buffer-lines buf))
          (row (editor-buffer-cursor-row buf))
          (cur-len (length (%current-line buf))))
+    (setf (editor-buffer-selection-end-row buf) nil
+          (editor-buffer-selection-end-col buf) nil)
     (if (and (editor-buffer-selection-anchor-row buf)
              (= (or (editor-buffer-selection-anchor-col buf) 0) 0))
         ;; Already in line selection: extend downward
@@ -802,44 +828,74 @@
                   (if till (min col (1+ pos)) pos)))))
     (%clamp-cursor buf)))
 
+(defun %char-class (c)
+  "Classify character into :whitespace, :word (alphanumeric or _), or :punct (symbols/punctuation)."
+  (cond
+    ((null c) :none)
+    ((member c '(#\Space #\Tab #\Newline #\Return)) :whitespace)
+    ((or (alphanumericp c) (char= c #\_)) :word)
+    (t :punct)))
+
 (defun %word-char-p (c)
-  (and c (or (alphanumericp c) (char= c #\_) (char= c #\-))))
+  (and c (or (alphanumericp c) (char= c #\_))))
 
 (defun %move-next-word (buf)
+  "Helix `w`: Move forward to start of next word or punctuation sequence."
   (let* ((cur (%current-line buf))
          (col (editor-buffer-cursor-col buf))
          (len (length cur)))
     (cond
       ((< col len)
-       (let ((i col))
-         (loop while (and (< i len) (%word-char-p (char cur i))) do (incf i))
-         (loop while (and (< i len) (not (%word-char-p (char cur i)))) do (incf i))
+       (let ((i col)
+             (init-class (%char-class (char cur col))))
+         (if (eq init-class :whitespace)
+             (loop while (and (< i len) (eq (%char-class (char cur i)) :whitespace)) do (incf i))
+             (progn
+               (loop while (and (< i len) (eq (%char-class (char cur i)) init-class)) do (incf i))
+               (loop while (and (< i len) (eq (%char-class (char cur i)) :whitespace)) do (incf i))))
          (if (< i len)
              (setf (editor-buffer-cursor-col buf) i)
              (if (< (1+ (editor-buffer-cursor-row buf)) (length (editor-buffer-lines buf)))
                  (progn
                    (incf (editor-buffer-cursor-row buf))
-                   (setf (editor-buffer-cursor-col buf) 0))
+                   (let* ((next-line (%current-line buf))
+                          (next-len (length next-line))
+                          (ni 0))
+                     (loop while (and (< ni next-len) (eq (%char-class (char next-line ni)) :whitespace)) do (incf ni))
+                     (setf (editor-buffer-cursor-col buf) (if (< ni next-len) ni 0))))
                  (setf (editor-buffer-cursor-col buf) (max 0 (1- len)))))))
       (t
        (when (< (1+ (editor-buffer-cursor-row buf)) (length (editor-buffer-lines buf)))
          (incf (editor-buffer-cursor-row buf))
-         (setf (editor-buffer-cursor-col buf) 0))))))
+         (let* ((next-line (%current-line buf))
+                (next-len (length next-line))
+                (ni 0))
+           (loop while (and (< ni next-len) (eq (%char-class (char next-line ni)) :whitespace)) do (incf ni))
+           (setf (editor-buffer-cursor-col buf) (if (< ni next-len) ni 0))))))))
 
 (defun %move-prev-word (buf)
+  "Helix `b`: Move backward to start of previous word or punctuation sequence."
   (let* ((cur (%current-line buf))
          (col (editor-buffer-cursor-col buf)))
     (cond
       ((> col 0)
-       (let ((i (1- col)))
-         (loop while (and (> i 0) (not (%word-char-p (char cur i)))) do (decf i))
-         (loop while (and (> i 0) (%word-char-p (char cur (1- i)))) do (decf i))
+       (let ((i col))
+         (loop while (and (> i 0) (eq (%char-class (char cur (1- i))) :whitespace)) do (decf i))
+         (when (> i 0)
+           (let ((target-class (%char-class (char cur (1- i)))))
+             (loop while (and (> i 0) (eq (%char-class (char cur (1- i))) target-class)) do (decf i))))
          (setf (editor-buffer-cursor-col buf) i)))
       (t
        (when (> (editor-buffer-cursor-row buf) 0)
          (decf (editor-buffer-cursor-row buf))
-         (let ((prev-len (length (%current-line buf))))
-           (setf (editor-buffer-cursor-col buf) (max 0 (1- prev-len)))))))))
+         (let* ((prev-line (%current-line buf))
+                (prev-len (length prev-line))
+                (i prev-len))
+           (loop while (and (> i 0) (eq (%char-class (char prev-line (1- i))) :whitespace)) do (decf i))
+           (when (> i 0)
+             (let ((target-class (%char-class (char prev-line (1- i)))))
+               (loop while (and (> i 0) (eq (%char-class (char prev-line (1- i))) target-class)) do (decf i))))
+           (setf (editor-buffer-cursor-col buf) i)))))))
 
 (defun %move-end-word (buf)
   "Helix `e`: Move forward to end of current or next word."
@@ -849,10 +905,19 @@
     (cond
       ((< col len)
        (let ((i col))
-         (when (and (< (1+ i) len) (%word-char-p (char cur i)) (not (%word-char-p (char cur (1+ i)))))
-           (incf i))
-         (loop while (and (< i len) (not (%word-char-p (char cur i)))) do (incf i))
-         (loop while (and (< (1+ i) len) (%word-char-p (char cur (1+ i)))) do (incf i))
+         (loop while (and (< i len) (eq (%char-class (char cur i)) :whitespace)) do (incf i))
+         (when (< i len)
+           (let ((cls (%char-class (char cur i))))
+             (when (and (= i col)
+                        (or (>= (1+ i) len)
+                            (not (eq (%char-class (char cur (1+ i))) cls))))
+               (incf i)
+               (loop while (and (< i len) (eq (%char-class (char cur i)) :whitespace)) do (incf i))
+               (when (< i len)
+                 (setf cls (%char-class (char cur i))))))
+           (when (< i len)
+             (let ((cls (%char-class (char cur i))))
+               (loop while (and (< (1+ i) len) (eq (%char-class (char cur (1+ i))) cls)) do (incf i)))))
          (if (< i len)
              (setf (editor-buffer-cursor-col buf) i)
              (if (< (1+ (editor-buffer-cursor-row buf)) (length (editor-buffer-lines buf)))
@@ -867,10 +932,11 @@
          (setf (editor-buffer-cursor-col buf) 0)
          (%move-end-word buf))))))
 
-(defmacro with-helix-motion ((buf) &body body)
+(defmacro with-helix-motion ((buf &key head-exclusive backward-word) &body body)
   "Execute a motion in BUF with Helix selection semantics:
-   In :normal mode, the motion transiently selects the movement range (anchor = old cursor,
-   head = new cursor), replacing any prior selection.
+   In :normal mode, the motion transiently selects the movement range, replacing prior selection.
+   When head-exclusive is true (e.g. w motion), the selection excludes the head character.
+   When backward-word is true (e.g. b motion), the selection excludes the character at old position.
    In :select mode, the initial anchor stays fixed and the selection extends."
   (let ((b (gensym "BUF"))
         (old-r (gensym "OLD-ROW"))
@@ -884,13 +950,63 @@
                (editor-buffer-selection-anchor-col ,b) ,old-c))
        ,@body
        (%clamp-cursor ,b)
-       (when (eq (editor-buffer-helix-mode ,b) :normal)
-         (if (or (/= (editor-buffer-cursor-row ,b) ,old-r)
-                 (/= (editor-buffer-cursor-col ,b) ,old-c))
-             (setf (editor-buffer-selection-anchor-row ,b) ,old-r
-                   (editor-buffer-selection-anchor-col ,b) ,old-c)
-             (setf (editor-buffer-selection-anchor-row ,b) nil
-                   (editor-buffer-selection-anchor-col ,b) nil))))))
+       (let ((new-r (editor-buffer-cursor-row ,b))
+             (new-c (editor-buffer-cursor-col ,b)))
+         (if (eq (editor-buffer-helix-mode ,b) :normal)
+             (cond
+               ((and (= new-r ,old-r) (= new-c ,old-c))
+                (setf (editor-buffer-selection-anchor-row ,b) nil
+                      (editor-buffer-selection-anchor-col ,b) nil
+                      (editor-buffer-selection-end-row ,b) nil
+                      (editor-buffer-selection-end-col ,b) nil))
+               (,head-exclusive
+                ;; w motion forward: anchor = old cursor, end = char before new cursor
+                (if (= new-r ,old-r)
+                    (if (> new-c ,old-c)
+                        (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+                              (editor-buffer-selection-anchor-col ,b) ,old-c
+                              (editor-buffer-selection-end-row ,b) new-r
+                              (editor-buffer-selection-end-col ,b) (1- new-c))
+                        (setf (editor-buffer-selection-anchor-row ,b) nil
+                              (editor-buffer-selection-anchor-col ,b) nil
+                              (editor-buffer-selection-end-row ,b) nil
+                              (editor-buffer-selection-end-col ,b) nil))
+                    ;; Wrapped across lines
+                    (if (> new-c 0)
+                        (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+                              (editor-buffer-selection-anchor-col ,b) ,old-c
+                              (editor-buffer-selection-end-row ,b) new-r
+                              (editor-buffer-selection-end-col ,b) (1- new-c))
+                        (let ((prev-len (length (aref (editor-buffer-lines ,b) (1- new-r)))))
+                          (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+                                (editor-buffer-selection-anchor-col ,b) ,old-c
+                                (editor-buffer-selection-end-row ,b) (1- new-r)
+                                (editor-buffer-selection-end-col ,b) (max 0 (1- prev-len)))))))
+               (,backward-word
+                ;; b motion backward: cursor is at start of target word; selection covers target word up to char before old cursor
+                (if (= new-r ,old-r)
+                    (if (< new-c ,old-c)
+                        (setf (editor-buffer-selection-anchor-row ,b) new-r
+                              (editor-buffer-selection-anchor-col ,b) new-c
+                              (editor-buffer-selection-end-row ,b) ,old-r
+                              (editor-buffer-selection-end-col ,b) (1- ,old-c))
+                        (setf (editor-buffer-selection-anchor-row ,b) nil
+                              (editor-buffer-selection-anchor-col ,b) nil
+                              (editor-buffer-selection-end-row ,b) nil
+                              (editor-buffer-selection-end-col ,b) nil))
+                    (setf (editor-buffer-selection-anchor-row ,b) new-r
+                          (editor-buffer-selection-anchor-col ,b) new-c
+                          (editor-buffer-selection-end-row ,b) ,old-r
+                          (editor-buffer-selection-end-col ,b) (if (> ,old-c 0) (1- ,old-c) 0))))
+               (t
+                ;; Standard inclusive motion (e, 0, $, G, etc.)
+                (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+                      (editor-buffer-selection-anchor-col ,b) ,old-c
+                      (editor-buffer-selection-end-row ,b) nil
+                      (editor-buffer-selection-end-col ,b) nil)))
+             ;; In :select mode: selection extends to current cursor
+             (setf (editor-buffer-selection-end-row ,b) nil
+                   (editor-buffer-selection-end-col ,b) nil))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Helix Command Execution (:w, :q, :wq, :e, :scratch)
@@ -940,7 +1056,9 @@
          (when (and sbuf (find-package :lispos.window))
            (let ((focus-sym (find-symbol "*FOCUSED-WINDOW*" :lispos.window)))
              (when (and focus-sym (symbol-value focus-sym))
-               (setf (slot-value (symbol-value focus-sym) (find-symbol "BUFFER" :lispos.window)) sbuf
+               (setf (lispos.window:window-buffer (symbol-value focus-sym)) sbuf
+                     (lispos.window:window-scroll-row (symbol-value focus-sym)) 0
+                     (lispos.window:window-scroll-col (symbol-value focus-sym)) 0
                      *current-buffer* sbuf))))))
 
       (t
@@ -966,7 +1084,9 @@
                         (when (find-package :lispos.window)
                           (let ((fwin (symbol-value (find-symbol "*FOCUSED-WINDOW*" :lispos.window))))
                             (when fwin
-                              (setf (slot-value fwin (find-symbol "BUFFER" :lispos.window)) new-buf
+                              (setf (lispos.window:window-buffer fwin) new-buf
+                                    (lispos.window:window-scroll-row fwin) 0
+                                    (lispos.window:window-scroll-col fwin) 0
                                     *current-buffer* new-buf))))))))))
 
       ;; SPC b: Open buffer picker (handles both buffer struct and buffer name string)
@@ -982,7 +1102,9 @@
                         (when (find-package :lispos.window)
                           (let ((fwin (symbol-value (find-symbol "*FOCUSED-WINDOW*" :lispos.window))))
                             (when fwin
-                              (setf (slot-value fwin (find-symbol "BUFFER" :lispos.window)) picked-buf
+                              (setf (lispos.window:window-buffer fwin) picked-buf
+                                    (lispos.window:window-scroll-row fwin) 0
+                                    (lispos.window:window-scroll-col fwin) 0
                                     *current-buffer* picked-buf))))))))))
 
       ;; SPC w: Save buffer
@@ -998,10 +1120,12 @@
       ;; SPC s: Open or switch to *scratch*
       ((#\s :s)
        (let ((sbuf (create-scratch-buffer)))
-         (when (find-package :lispos.window)
+         (when (and sbuf (find-package :lispos.window))
            (let ((fwin (symbol-value (find-symbol "*FOCUSED-WINDOW*" :lispos.window))))
              (when fwin
-               (setf (slot-value fwin (find-symbol "BUFFER" :lispos.window)) sbuf
+               (setf (lispos.window:window-buffer fwin) sbuf
+                     (lispos.window:window-scroll-row fwin) 0
+                     (lispos.window:window-scroll-col fwin) 0
                      *current-buffer* sbuf))))))
 
       ;; SPC y: Yank selection
@@ -1185,30 +1309,38 @@
          ;; In Normal mode: single-step motions cancel any active selection and move cursor
          ((or (eq k #\h) (eq k :left))
           (setf (editor-buffer-selection-anchor-row buf) nil
-                (editor-buffer-selection-anchor-col buf) nil)
+                (editor-buffer-selection-anchor-col buf) nil
+                (editor-buffer-selection-end-row buf) nil
+                (editor-buffer-selection-end-col buf) nil)
           (decf (editor-buffer-cursor-col buf))
           (%clamp-cursor buf))
          ((or (eq k #\l) (eq k :right))
           (setf (editor-buffer-selection-anchor-row buf) nil
-                (editor-buffer-selection-anchor-col buf) nil)
+                (editor-buffer-selection-anchor-col buf) nil
+                (editor-buffer-selection-end-row buf) nil
+                (editor-buffer-selection-end-col buf) nil)
           (incf (editor-buffer-cursor-col buf))
           (%clamp-cursor buf))
          ((or (eq k #\j) (eq k :down))
           (setf (editor-buffer-selection-anchor-row buf) nil
-                (editor-buffer-selection-anchor-col buf) nil)
+                (editor-buffer-selection-anchor-col buf) nil
+                (editor-buffer-selection-end-row buf) nil
+                (editor-buffer-selection-end-col buf) nil)
           (incf (editor-buffer-cursor-row buf))
           (%clamp-cursor buf))
          ((or (eq k #\k) (eq k :up))
           (setf (editor-buffer-selection-anchor-row buf) nil
-                (editor-buffer-selection-anchor-col buf) nil)
+                (editor-buffer-selection-anchor-col buf) nil
+                (editor-buffer-selection-end-row buf) nil
+                (editor-buffer-selection-end-col buf) nil)
           (decf (editor-buffer-cursor-row buf))
           (%clamp-cursor buf))
 
          ;; Word motions: w, b, e (transient motion selection in normal mode)
          ((eq k #\w)
-          (with-helix-motion (buf) (%move-next-word buf)))
+          (with-helix-motion (buf :head-exclusive t) (%move-next-word buf)))
          ((eq k #\b)
-          (with-helix-motion (buf) (%move-prev-word buf)))
+          (with-helix-motion (buf :backward-word t) (%move-prev-word buf)))
          ((eq k #\e)
           (with-helix-motion (buf) (%move-end-word buf)))
 
@@ -1584,3 +1716,185 @@
         existing
         (let ((buf (make-instance 'scratch-buffer :name name)))
           (register-buffer buf)))))
+
+;;; ---------------------------------------------------------------------------
+;;; Concrete Subclass: Shell Buffer (Modal Terminal with Helix Scrollback)
+;;; ---------------------------------------------------------------------------
+
+(defclass shell-buffer (editor-buffer)
+  ((engine
+    :initarg :engine
+    :initform nil
+    :accessor shell-buffer-engine
+    :documentation "Underlying shell-engine instance."))
+  (:default-initargs :name "*shell*" :helix-mode :insert)
+  (:documentation "Buffer hosting an interactive LispOS shell session with Helix modal editing."))
+
+(defmethod initialize-instance :after ((buf shell-buffer) &key &allow-other-keys)
+  (unless (shell-buffer-engine buf)
+    (setf (shell-buffer-engine buf) (lispos.shell:make-shell-engine)))
+  (sync-shell-buffer-lines buf)
+  (let* ((eng (shell-buffer-engine buf))
+         (hist-len (length (lispos.shell:output-history-lines eng)))
+         (prompt-len (length (lispos.shell:engine-prompt eng)))
+         (pt (lispos.shell:buffer-point eng)))
+    (setf (editor-buffer-cursor-row buf) hist-len
+          (editor-buffer-cursor-col buf) (+ prompt-len pt))))
+
+(defmethod buffer-engine ((buf shell-buffer))
+  (shell-buffer-engine buf))
+
+(defmethod buffer-mode ((buf shell-buffer))
+  :shell)
+
+(defun sync-shell-buffer-lines (buf)
+  "Synchronize editor-buffer lines vector from shell-engine history and prompt."
+  (let ((eng (shell-buffer-engine buf)))
+    (when eng
+      (let* ((history (lispos.shell:output-history-lines eng))
+             (prompt (lispos.shell:engine-prompt eng))
+             (buf-text (lispos.shell:buffer-text eng))
+             (current-line (concatenate 'string prompt buf-text))
+             (all-lines (append history (list current-line))))
+        (setf (editor-buffer-lines buf)
+              (make-array (length all-lines)
+                          :adjustable t
+                          :fill-pointer (length all-lines)
+                          :initial-contents all-lines))))))
+
+(defmethod buffer-content-lines ((buf shell-buffer))
+  (sync-shell-buffer-lines buf)
+  (coerce (editor-buffer-lines buf) 'list))
+
+(defmethod buffer-cursor-position ((buf shell-buffer))
+  (sync-shell-buffer-lines buf)
+  (if (eq (editor-buffer-helix-mode buf) :insert)
+      (let ((eng (shell-buffer-engine buf)))
+        (if eng
+            (let* ((history-count (length (lispos.shell:output-history-lines eng)))
+                   (prompt-len (length (lispos.shell:engine-prompt eng)))
+                   (point (lispos.shell:buffer-point eng)))
+              (setf (editor-buffer-cursor-row buf) history-count
+                    (editor-buffer-cursor-col buf) (+ prompt-len point))
+              (values history-count (+ prompt-len point)))
+            (values 0 0)))
+      (values (editor-buffer-cursor-row buf) (editor-buffer-cursor-col buf))))
+
+(defmethod buffer-handle-key ((buf shell-buffer) key &key (char nil) (modifiers nil))
+  (let ((eng (shell-buffer-engine buf)))
+    (unless eng
+      (return-from buffer-handle-key nil))
+
+    (cond
+      ;; ----------------------------------------------------------------------
+      ;; In :insert mode: input feeds directly to shell-engine
+      ;; ----------------------------------------------------------------------
+      ((eq (editor-buffer-helix-mode buf) :insert)
+       (cond
+         ;; Escape: transition to Normal mode (:normal)
+         ((or (eq key :escape) (eq char #\Esc))
+          (setf (editor-buffer-helix-mode buf) :normal
+                (editor-buffer-selection-anchor-row buf) nil
+                (editor-buffer-selection-anchor-col buf) nil
+                (editor-buffer-selection-end-row buf) nil
+                (editor-buffer-selection-end-col buf) nil)
+          (sync-shell-buffer-lines buf)
+          (let* ((lines (editor-buffer-lines buf))
+                 (last-row (max 0 (1- (length lines))))
+                 (last-col (if (> (length lines) 0) (max 0 (1- (length (aref lines last-row)))) 0)))
+            (setf (editor-buffer-cursor-row buf) last-row
+                  (editor-buffer-cursor-col buf) last-col))
+          (setf (editor-buffer-status-message buf) "[Normal mode]")
+          t)
+
+         ;; Normal typing / shell keys: forward to shell-engine
+         (t
+          (let ((effective-key
+                  (cond
+                    ((and (member :ctrl modifiers) (characterp (or char key)))
+                     (let ((c (char-upcase (or char key))))
+                       (case c
+                         (#\A :ctrl-a)
+                         (#\B :ctrl-b)
+                         (#\C :ctrl-c)
+                         (#\D :ctrl-d)
+                         (#\E :ctrl-e)
+                         (#\F :ctrl-f)
+                         (#\K :ctrl-k)
+                         (#\L :ctrl-l)
+                         (#\N :ctrl-n)
+                         (#\P :ctrl-p)
+                         (#\U :ctrl-u)
+                         (t key))))
+                    (t (or char key)))))
+            (lispos.shell:handle-key eng effective-key)
+            (sync-shell-buffer-lines buf)
+            (let* ((hist-len (length (lispos.shell:output-history-lines eng)))
+                   (prompt-len (length (lispos.shell:engine-prompt eng)))
+                   (pt (lispos.shell:buffer-point eng)))
+              (setf (editor-buffer-cursor-row buf) hist-len
+                    (editor-buffer-cursor-col buf) (+ prompt-len pt)))
+            t))))
+
+      ;; ----------------------------------------------------------------------
+      ;; In :normal or :select mode: Helix navigation and clipboard
+      ;; ----------------------------------------------------------------------
+      (t
+       (let ((k (if (characterp (or char key)) (or char key) key))
+             (prompt-row (length (lispos.shell:output-history-lines eng))))
+         (cond
+           ;; Enter insert mode: i, a, I, A
+           ((and (eq (editor-buffer-helix-mode buf) :normal)
+                 (member k '(#\i #\a #\I #\A)))
+            (setf (editor-buffer-helix-mode buf) :insert
+                  (editor-buffer-selection-anchor-row buf) nil
+                  (editor-buffer-selection-anchor-col buf) nil
+                  (editor-buffer-selection-end-row buf) nil
+                  (editor-buffer-selection-end-col buf) nil)
+            (sync-shell-buffer-lines buf)
+            (let ((prompt-len (length (lispos.shell:engine-prompt eng)))
+                  (pt (lispos.shell:buffer-point eng)))
+              (setf (editor-buffer-cursor-row buf) prompt-row
+                    (editor-buffer-cursor-col buf) (+ prompt-len pt)))
+            (setf (editor-buffer-status-message buf) "[Insert mode]")
+            t)
+
+           ;; Paste into shell prompt: p, P
+           ((and (eq (editor-buffer-helix-mode buf) :normal)
+                 (or (eq k #\p) (eq k #\P)))
+            (let ((clip (editor-buffer-clipboard buf)))
+              (if (and clip (> (length clip) 0))
+                  (progn
+                    (lispos.shell:feed-input eng clip)
+                    (sync-shell-buffer-lines buf)
+                    (let ((prompt-len (length (lispos.shell:engine-prompt eng)))
+                          (pt (lispos.shell:buffer-point eng)))
+                      (setf (editor-buffer-cursor-row buf) prompt-row
+                            (editor-buffer-cursor-col buf) (+ prompt-len pt)))
+                    (setf (editor-buffer-status-message buf) "[Pasted into prompt]"))
+                  (setf (editor-buffer-status-message buf) "[Clipboard empty]")))
+            t)
+
+           ;; Protect scrollback lines from destructive deletion d / c
+           ((and (eq (editor-buffer-helix-mode buf) :normal)
+                 (member k '(#\d #\c :delete))
+                 (< (editor-buffer-cursor-row buf) prompt-row))
+            (setf (editor-buffer-status-message buf) "[Scrollback is read-only; use 'y' to copy]")
+            t)
+
+           ;; Otherwise delegate to standard editor-buffer modal handler
+           (t
+            (call-next-method))))))))
+
+(defmethod buffer-modeline-details ((buf shell-buffer))
+  (let* ((cwd (or (ignore-errors (lispos.shell:get-cwd-namestring)) "~"))
+         (admin-home (ignore-errors (namestring (pathname lispos.paths:+admin-home+))))
+         (clean-home (if (and admin-home (> (length admin-home) 1)
+                              (char= (char admin-home (1- (length admin-home))) #\/))
+                         (subseq admin-home 0 (1- (length admin-home)))
+                         admin-home)))
+    (cond
+      ((or (string= cwd clean-home) (string= cwd "/Users/Admin") (string= cwd "/Users/Admin/")) "~")
+      ((and clean-home (search clean-home cwd) (= (search clean-home cwd) 0))
+       (concatenate 'string "~" (subseq cwd (length clean-home))))
+      (t cwd))))

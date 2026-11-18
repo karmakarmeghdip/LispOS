@@ -186,17 +186,12 @@
            (when best (focus-window (first (sort best #'< :key #'window-y))))))))))
 
 (defun active-window-modeline-info ()
-  "Generate unified status line information for active window matching Emacs desktop modeline."
+  "Generate unified status line information for active window: <mode-icon>  <name>."
   (let* ((win (or *focused-window* (first (all-leaf-windows))))
-         (buf (and win (window-buffer win)))
-         (buf-name (if buf (lispos.buffer:buffer-name buf) "*none*")))
+         (buf (and win (window-buffer win))))
     (if (null buf)
         "*none*"
-        (let ((mode-str (lispos.buffer:buffer-mode-name buf))
-              (details (lispos.buffer:buffer-modeline-details buf))
-              (mod-str (if (lispos.buffer:buffer-modified-p buf) "[*] " "")))
-          (case (lispos.buffer:buffer-mode buf)
-            (:shell
-             (format nil "~A - ~A" details (if (string= buf-name "*shell*") "lispos" buf-name)))
-            (t
-             (format nil "~A~A [~A] ~A" mod-str buf-name mode-str details)))))))
+        (let* ((icon-char (lispos.buffer:buffer-mode-icon buf))
+               (name (lispos.buffer:buffer-name buf))
+               (mod (if (lispos.buffer:buffer-modified-p buf) " *" "")))
+          (format nil "~A  ~A~A" (string icon-char) name mod)))))
