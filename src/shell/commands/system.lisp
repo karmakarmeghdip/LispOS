@@ -87,6 +87,96 @@
   nil)
 
 ;;; ---------------------------------------------------------------------------
+;;; randr / resolution / res - Display Resolution & Modesetting
+;;; ---------------------------------------------------------------------------
+
+(define-shell-command randr (engine &rest args)
+  "Query or change display resolution.
+Usage:
+  randr                 List supported display modes and current resolution
+  randr <w> <h>         Set resolution (e.g. randr 1920 1080)
+  randr <w>x<h>         Set resolution (e.g. randr 1920x1080)
+  randr auto            Switch to monitor's preferred/native resolution"
+  (declare (ignore engine))
+  (cond
+    ;; No args: List supported modes
+    ((null args)
+     (let* ((modes (lispos.drm:list-modes))
+            (cur-drm lispos.drm:*drm-state*)
+            (cur-w (if cur-drm (lispos.drm:drm-state-width cur-drm) 0))
+            (cur-h (if cur-drm (lispos.drm:drm-state-height cur-drm) 0)))
+       (if (null modes)
+           (format t "No display modes found or DRM uninitialized.~%")
+           (progn
+             (format t "Screen 0: current ~Ax~A~%" cur-w cur-h)
+             (format t "  IDX  RESOLUTION    REFRESH  FLAGS~%")
+             (format t "  ---------------------------------~%")
+             (dolist (m modes)
+               (let ((pref (if (lispos.drm:drm-mode-info-preferred-p m) "+" " "))
+                     (curr (if (lispos.drm:drm-mode-info-current-p m) "*" " "))
+                     (res-str (format nil "~Ax~A"
+                                      (lispos.drm:drm-mode-info-width m)
+                                      (lispos.drm:drm-mode-info-height m))))
+                 (format t "  ~3D  ~9A  ~3DHz    ~A~A~%"
+                         (lispos.drm:drm-mode-info-index m)
+                         res-str
+                         (lispos.drm:drm-mode-info-vrefresh m)
+                         pref curr)))
+             (format t "  (+ preferred, * current)~%")))))
+
+    ;; Single arg: 'auto', 'preferred', or '<w>x<h>'
+    ((= (length args) 1)
+     (let ((arg (first args)))
+       (cond
+         ((or (string-equal arg "auto") (string-equal arg "preferred"))
+          (let ((pref (lispos.drm:find-mode :preferred)))
+            (if pref
+                (handler-case
+                    (let ((st (lispos.drm:set-mode (lispos.drm:drm-mode-info-width pref)
+                                                  (lispos.drm:drm-mode-info-height pref))))
+                      (format t "Resolution switched to native preferred mode ~Ax~A.~%"
+                              (lispos.drm:drm-state-width st)
+                              (lispos.drm:drm-state-height st)))
+                  (error (c)
+                    (format *error-output* "randr: error setting resolution: ~A~%" c)))
+                (format *error-output* "randr: no preferred mode found.~%"))))
+         (t
+          (multiple-value-bind (w h) (lispos.drm:parse-resolution-string arg)
+            (if (and w h)
+                (handler-case
+                    (progn
+                      (lispos.drm:set-mode w h)
+                      (format t "Resolution switched to ~Ax~A.~%" w h))
+                  (error (c)
+                    (format *error-output* "randr: error setting resolution: ~A~%" c)))
+                (format *error-output* "randr: invalid resolution '~A'. Expected <w>x<h> or auto.~%" arg)))))))
+
+    ;; Two args: '<w> <h>'
+    ((= (length args) 2)
+     (let ((w (parse-integer (first args) :junk-allowed t))
+           (h (parse-integer (second args) :junk-allowed t)))
+       (if (and w h (> w 0) (> h 0))
+           (handler-case
+               (progn
+                 (lispos.drm:set-mode w h)
+                 (format t "Resolution switched to ~Ax~A.~%" w h))
+             (error (c)
+               (format *error-output* "randr: error setting resolution: ~A~%" c)))
+           (format *error-output* "randr: invalid dimensions '~A ~A'.~%" (first args) (second args)))))
+
+    (t
+     (format *error-output* "Usage: randr [<width> <height> | <width>x<height> | auto]~%")))
+  nil)
+
+(define-shell-command resolution (engine &rest args)
+  "Alias for randr."
+  (apply (gethash "randr" *shell-commands*) engine args))
+
+(define-shell-command res (engine &rest args)
+  "Alias for randr."
+  (apply (gethash "randr" *shell-commands*) engine args))
+
+;;; ---------------------------------------------------------------------------
 ;;; help - Interactive Command Guide
 ;;; ---------------------------------------------------------------------------
 
@@ -110,6 +200,7 @@
   (format t "   whoami               Print current user name~%")
   (format t "   history              Display command history~%")
   (format t "   clear                Clear screen (C-l)~%")
+  (format t "   randr [w h|auto]     Query or change display resolution (aliases: res, resolution)~%")
   (format t "   sync                 Flush filesystem buffers to storage~%")
   (format t "~%")
   (format t " [Common Lisp Mode] (surround expression with parentheses):~%")

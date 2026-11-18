@@ -36,10 +36,53 @@
 (defvar *terminal* nil
   "Active primary interactive graphical terminal instance.")
 
+(defun resize-terminal (term new-w new-h)
+  "Resize terminal display geometry, relayout window tree, and re-render."
+  (when term
+    (let* ((disp (terminal-display term))
+           (fnt (terminal-font term))
+           (cw (if fnt (lispos.font:font-char-width fnt) 8))
+           (lh (if fnt (lispos.font:font-line-height fnt) 16))
+           (modeline-h (terminal-modeline-height term))
+           (workspace-h (max 100 (- new-h modeline-h)))
+           (cols (max 40 (floor (- new-w 40) cw)))
+           (rows (max 10 (floor workspace-h lh))))
+      (when lispos.window:*root-window*
+        (lispos.window:layout-windows lispos.window:*root-window* 0 0 new-w workspace-h))
+      (setf (terminal-cols term) cols
+            (terminal-rows term) rows
+            (terminal-dirty-p term) t)
+      (when disp
+        (lispos.display:mark-all-dirty disp)
+        (render-terminal term)
+        (lispos.display:present-display disp))
+      (lispos.drm:flush-screen)
+      term)))
+
+(defun on-drm-terminal-mode-changed (w h pitch)
+  "Callback for lispos.drm:*mode-changed-hooks* to resize terminal and relayout windows."
+  (declare (ignore pitch))
+  (when *terminal*
+    (resize-terminal *terminal* w h)))
+
+(defun set-resolution (target-w &optional target-h)
+  "Switch display resolution to TARGET-W x TARGET-H or auto.
+Calls lispos.drm:set-mode, which notifies display & terminal resize hooks."
+  (let ((mode (if (or (eq target-w :auto) (eq target-w :preferred))
+                  (lispos.drm:find-mode :preferred)
+                  (if (and (integerp target-w) (integerp target-h))
+                      (lispos.drm:find-mode (list target-w target-h))
+                      (lispos.drm:find-mode target-w)))))
+    (unless mode
+      (error "Display resolution ~A~@[x~A~] not supported by display hardware" target-w target-h))
+    (lispos.drm:set-mode (lispos.drm:drm-mode-info-width mode)
+                         (lispos.drm:drm-mode-info-height mode))))
+
 (defun init-terminal (&key (display lispos.display:*display*)
                            (font lispos.font:*font*)
                            (engine nil))
   "Initialize graphical workspace, tiling window tree, and default buffers."
+  (pushnew 'on-drm-terminal-mode-changed lispos.drm:*mode-changed-hooks*)
   (let* ((disp (or display (lispos.display:init-display)))
          (fnt (or font (lispos.font:init-font)))
          (w (lispos.display:display-width disp))

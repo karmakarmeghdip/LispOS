@@ -500,9 +500,32 @@
       (feed-input engine '("history" :enter))
       (assert-test (search "echo" (engine-last-stdout engine)) "history lists executed commands")
 
+      ;; randr command and aliases
+      (feed-input engine '("randr" :enter))
+      (assert-test (or (search "Screen 0:" (engine-last-stdout engine))
+                       (search "No display modes found" (engine-last-stdout engine)))
+                   "randr command executed")
+
+      (feed-input engine '("resolution" :enter))
+      (assert-test (or (search "Screen 0:" (engine-last-stdout engine))
+                       (search "No display modes found" (engine-last-stdout engine)))
+                   "resolution alias executed")
+
+      (feed-input engine '("res" :enter))
+      (assert-test (or (search "Screen 0:" (engine-last-stdout engine))
+                       (search "No display modes found" (engine-last-stdout engine)))
+                   "res alias executed")
+
+      ;; parse-resolution-string
+      (multiple-value-bind (w h) (lispos.drm:parse-resolution-string "1920x1080")
+        (assert-test (and (= w 1920) (= h 1080)) "parse-resolution-string 1920x1080"))
+      (multiple-value-bind (w h) (lispos.drm:parse-resolution-string "1280 800")
+        (assert-test (and (= w 1280) (= h 800)) "parse-resolution-string 1280 800"))
+
       ;; help
       (feed-input engine '("help" :enter))
-      (assert-test (search "Command Mode" (engine-last-stdout engine)) "help displays command guide"))))
+      (assert-test (search "Command Mode" (engine-last-stdout engine)) "help displays command guide")
+      (assert-test (search "randr" (engine-last-stdout engine)) "help lists randr"))))
 
 (defun test-dual-mode-evaluation ()
   (def-test-group "15. Dual-Mode Evaluation (Implicit Shell vs Explicit Lisp)"

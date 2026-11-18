@@ -15,6 +15,24 @@
    #:drm-state-pitch
    #:drm-state-size
    #:drm-state-sap
+   #:drm-state-mmap-addr
+   #:drm-mode-info
+   #:drm-mode-info-p
+   #:drm-mode-info-index
+   #:drm-mode-info-name
+   #:drm-mode-info-width
+   #:drm-mode-info-height
+   #:drm-mode-info-vrefresh
+   #:drm-mode-info-flags
+   #:drm-mode-info-type
+   #:drm-mode-info-preferred-p
+   #:drm-mode-info-current-p
+   #:*mode-changed-hooks*
+   #:parse-resolution-string
+   #:detect-boot-resolution
+   #:list-modes
+   #:find-mode
+   #:set-mode
    #:init-drm
    #:close-drm
    #:clear-screen

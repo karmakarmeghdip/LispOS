@@ -12,11 +12,13 @@
    #:display-pitch
    #:display-backbuffer
    #:display-drm-state
+   #:resize-display
    #:init-display
    #:close-display
    #:clear-display
    #:fill-rect
    #:mark-dirty
+   #:mark-all-dirty
    #:present-display
    #:rgb
    #:argb

@@ -67,8 +67,25 @@
         (display-dirty-y2 display) (display-height display)
         (display-dirty-p display) t))
 
+(defun resize-display (display new-w new-h &optional (new-pitch (* new-w 4)))
+  "Resize the display backbuffer and dimensions to match a new DRM resolution."
+  (when display
+    (let ((new-buf (make-array (* new-w new-h) :element-type '(unsigned-byte 32) :initial-element #xFF1E1E2E)))
+      (setf (display-width display) new-w
+            (display-height display) new-h
+            (display-pitch display) new-pitch
+            (display-backbuffer display) new-buf)
+      (mark-all-dirty display)
+      display)))
+
+(defun on-drm-display-mode-changed (w h pitch)
+  "Callback for lispos.drm:*mode-changed-hooks* to resize the active display."
+  (when *display*
+    (resize-display *display* w h pitch)))
+
 (defun init-display (&optional (drm-state lispos.drm:*drm-state*))
   "Initialize double-buffered display on top of DRM KMS."
+  (pushnew 'on-drm-display-mode-changed lispos.drm:*mode-changed-hooks*)
   (let* ((drm (or drm-state
                   (and (not lispos.drm:*drm-state*) (lispos.drm:init-drm))
                   lispos.drm:*drm-state*))
