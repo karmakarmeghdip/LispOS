@@ -148,12 +148,21 @@
 
       (buffer-handle-key ed #\w :char #\w)
       (assert-test (= (editor-buffer-cursor-col ed) 4) "'w' jumps to next word 'quick' (col 4)")
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'w' stays in :normal mode")
+      (assert-test (= (editor-buffer-selection-anchor-col ed) 0) "'w' sets selection anchor to previous col 0")
 
       (buffer-handle-key ed #\w :char #\w)
       (assert-test (= (editor-buffer-cursor-col ed) 10) "'w' jumps to 'brown' (col 10)")
+      (assert-test (= (editor-buffer-selection-anchor-col ed) 4) "'w' replaces selection anchor with previous col 4")
 
       (buffer-handle-key ed #\b :char #\b)
       (assert-test (= (editor-buffer-cursor-col ed) 4) "'b' jumps back to 'quick' (col 4)")
+      (assert-test (= (editor-buffer-selection-anchor-col ed) 10) "'b' transiently selects from 10 back to 4")
+
+      ;; Single-step motion in normal mode cancels selection
+      (buffer-handle-key ed #\l :char #\l)
+      (assert-test (= (editor-buffer-cursor-col ed) 5) "'l' advances col to 5")
+      (assert-test (null (editor-buffer-selection-anchor-row ed)) "single-step motion 'l' cancels normal mode selection")
 
       (buffer-handle-key ed #\$ :char #\$)
       (assert-test (= (editor-buffer-cursor-col ed) 18) "'$' jumps to end of line")
@@ -163,6 +172,7 @@
 
       (buffer-handle-key ed #\j :char #\j)
       (assert-test (= (editor-buffer-cursor-row ed) 1) "'j' moves down to row 1")
+      (assert-test (null (editor-buffer-selection-anchor-row ed)) "'j' cancels selection")
 
       (buffer-handle-key ed #\k :char #\k)
       (assert-test (= (editor-buffer-cursor-row ed) 0) "'k' moves up to row 0")
@@ -171,9 +181,26 @@
       (buffer-handle-key ed #\d :char #\d)
       (assert-test (string= (aref (editor-buffer-lines ed) 0) "he quick brown fox") "'d' deletes char under cursor")
 
-      ;; In Helix: 'x' selects current line, 'd' deletes selection ('xd' deletes line)
+      ;; In Helix: 'x' selects current line in Normal mode ('NOR')
       (buffer-handle-key ed #\x :char #\x)
-      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'x' selects current line into select mode")
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'x' selects current line while remaining in :normal mode")
+      (assert-test (string= (buffer-mode-name ed) "NOR") "mode name remains NOR")
+      (assert-test (= (editor-buffer-selection-anchor-row ed) 0) "line anchor row is 0")
+
+      ;; Pressing 'x' a second time extends the line selection across multiple lines
+      (buffer-handle-key ed #\x :char #\x)
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "second 'x' stays in :normal mode")
+      (assert-test (= (editor-buffer-selection-anchor-row ed) 0) "line anchor remains at 0")
+      (assert-test (= (editor-buffer-cursor-row ed) 1) "cursor extended to row 1")
+
+      ;; Arrow key or motion in normal mode cancels multi-line selection
+      (buffer-handle-key ed :up)
+      (assert-test (null (editor-buffer-selection-anchor-row ed)) "arrow key cancelled multi-line selection in normal mode")
+      (assert-test (= (editor-buffer-cursor-row ed) 0) "cursor moved to row 0")
+
+      ;; 'x' selects line, then 'd' deletes selection ('xd' deletes line)
+      (buffer-handle-key ed #\x :char #\x)
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'x' selected line 0")
       (buffer-handle-key ed #\d :char #\d)
       (assert-test (= (length (editor-buffer-lines ed)) 1) "'xd' deleted current line")
       (assert-test (string= (aref (editor-buffer-lines ed) 0) "jumps over the dog") "remaining line is second line")
@@ -252,9 +279,9 @@
       (assert-test (null (editor-buffer-selection-anchor-row ed)) "anchor cleared after yank")
       (assert-test (string= (editor-buffer-clipboard ed) "First l") "yanked exact selected text into clipboard")
 
-      ;; Helix 'x' line selection
+      ;; Helix 'x' line selection in normal mode stays in :normal mode
       (buffer-handle-key ed #\x :char #\x)
-      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'x' enters select mode for line")
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'x' stays in :normal mode")
       (assert-test (= (editor-buffer-selection-anchor-col ed) 0) "anchor col is 0 for line select")
 
       ;; Flip selection with Alt-;
@@ -265,15 +292,22 @@
       (buffer-handle-key ed #\; :char #\;)
       (assert-test (eq (editor-buffer-helix-mode ed) :normal) "';' collapsed selection to normal mode")
 
-      ;; Helix '%' select all
+      ;; Helix '%' select all in normal mode
       (buffer-handle-key ed #\% :char #\%)
-      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'%' selected entire buffer")
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'%' selected entire buffer in normal mode")
+      (assert-test (not (null (editor-buffer-selection-anchor-row ed))) "anchor set for '%'")
 
       ;; Delete entire selection with 'd'
       (buffer-handle-key ed #\d :char #\d)
       (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'d' on selection returns to :normal")
       (assert-test (= (length (editor-buffer-lines ed)) 1) "entire buffer cleared")
-      (assert-test (string= (aref (editor-buffer-lines ed) 0) "") "buffer line is empty"))))
+      (assert-test (string= (aref (editor-buffer-lines ed) 0) "") "buffer line is empty")
+
+      ;; 'v' toggle in select mode returns to normal mode
+      (buffer-handle-key ed #\v :char #\v)
+      (assert-test (eq (editor-buffer-helix-mode ed) :select) "'v' enters :select mode")
+      (buffer-handle-key ed #\v :char #\v)
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "'v' in select mode toggles back to :normal mode"))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; 7. Undo & Redo Subsystem (u, U)
@@ -415,7 +449,7 @@
       (buffer-handle-key ed #\m :char #\m)
       (buffer-handle-key ed #\i :char #\i)
       (buffer-handle-key ed #\w :char #\w)
-      (assert-test (eq (editor-buffer-helix-mode ed) :select) "miw enters select mode")
+      (assert-test (eq (editor-buffer-helix-mode ed) :normal) "miw in normal mode stays in :normal mode")
       (assert-test (string= (lispos.buffer::%extract-selection-text ed) "second") "miw selected word 'second'")
 
       ;; 5. Transformations: ~ toggles case

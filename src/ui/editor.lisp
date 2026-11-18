@@ -338,13 +338,12 @@
          (row (editor-buffer-cursor-row buf))
          (cur-len (length (%current-line buf))))
     (if (and (editor-buffer-selection-anchor-row buf)
-             (= (editor-buffer-selection-anchor-col buf) 0))
+             (= (or (editor-buffer-selection-anchor-col buf) 0) 0))
         ;; Already in line selection: extend downward
         (let* ((next-r (min (1- (length lines)) (1+ row)))
                (next-line (aref lines next-r)))
           (setf (editor-buffer-cursor-row buf) next-r
-                (editor-buffer-cursor-col buf) (max 0 (1- (length next-line)))
-                (editor-buffer-helix-mode buf) :select)
+                (editor-buffer-cursor-col buf) (max 0 (1- (length next-line))))
           (setf (editor-buffer-status-message buf)
                 (format nil "[Selected ~D lines]"
                         (1+ (abs (- next-r (editor-buffer-selection-anchor-row buf)))))))
@@ -352,15 +351,13 @@
         (progn
           (setf (editor-buffer-selection-anchor-row buf) row
                 (editor-buffer-selection-anchor-col buf) 0
-                (editor-buffer-cursor-col buf) (max 0 (1- cur-len))
-                (editor-buffer-helix-mode buf) :select)
+                (editor-buffer-cursor-col buf) (max 0 (1- cur-len)))
           (setf (editor-buffer-status-message buf) "[Selected 1 line]")))))
 
 (defun %select-line-bounds (buf)
   "Helix `X`: Extend current selection to line bounds."
   (setf (editor-buffer-selection-anchor-col buf) 0
         (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf))))
-        (editor-buffer-helix-mode buf) :select
         (editor-buffer-status-message buf) "[Selected line bounds]"))
 
 (defun %select-all (buf)
@@ -372,7 +369,6 @@
           (editor-buffer-selection-anchor-col buf) 0
           (editor-buffer-cursor-row buf) last-r
           (editor-buffer-cursor-col buf) (max 0 (1- (length last-line)))
-          (editor-buffer-helix-mode buf) :select
           (editor-buffer-status-message buf) "[Selected all]")))
 
 (defun %replace-selection-with-yanked (buf)
@@ -562,7 +558,6 @@
             (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
                   (editor-buffer-selection-anchor-col buf) start
                   (editor-buffer-cursor-col buf) (max start (1- end))
-                  (editor-buffer-helix-mode buf) :select
                   (editor-buffer-status-message buf)
                   (if around "[Selected around word]" "[Selected inside word]"))))))))
 
@@ -582,7 +577,6 @@
                   (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
                         (editor-buffer-selection-anchor-col buf) s
                         (editor-buffer-cursor-col buf) (max s (1- e))
-                        (editor-buffer-helix-mode buf) :select
                         (editor-buffer-status-message buf)
                         (if around "[Selected around]" "[Selected inside]")))))))))))
 
@@ -847,6 +841,57 @@
          (let ((prev-len (length (%current-line buf))))
            (setf (editor-buffer-cursor-col buf) (max 0 (1- prev-len)))))))))
 
+(defun %move-end-word (buf)
+  "Helix `e`: Move forward to end of current or next word."
+  (let* ((cur (%current-line buf))
+         (col (editor-buffer-cursor-col buf))
+         (len (length cur)))
+    (cond
+      ((< col len)
+       (let ((i col))
+         (when (and (< (1+ i) len) (%word-char-p (char cur i)) (not (%word-char-p (char cur (1+ i)))))
+           (incf i))
+         (loop while (and (< i len) (not (%word-char-p (char cur i)))) do (incf i))
+         (loop while (and (< (1+ i) len) (%word-char-p (char cur (1+ i)))) do (incf i))
+         (if (< i len)
+             (setf (editor-buffer-cursor-col buf) i)
+             (if (< (1+ (editor-buffer-cursor-row buf)) (length (editor-buffer-lines buf)))
+                 (progn
+                   (incf (editor-buffer-cursor-row buf))
+                   (setf (editor-buffer-cursor-col buf) 0)
+                   (%move-end-word buf))
+                 (setf (editor-buffer-cursor-col buf) (max 0 (1- len)))))))
+      (t
+       (when (< (1+ (editor-buffer-cursor-row buf)) (length (editor-buffer-lines buf)))
+         (incf (editor-buffer-cursor-row buf))
+         (setf (editor-buffer-cursor-col buf) 0)
+         (%move-end-word buf))))))
+
+(defmacro with-helix-motion ((buf) &body body)
+  "Execute a motion in BUF with Helix selection semantics:
+   In :normal mode, the motion transiently selects the movement range (anchor = old cursor,
+   head = new cursor), replacing any prior selection.
+   In :select mode, the initial anchor stays fixed and the selection extends."
+  (let ((b (gensym "BUF"))
+        (old-r (gensym "OLD-ROW"))
+        (old-c (gensym "OLD-COL")))
+    `(let* ((,b ,buf)
+            (,old-r (editor-buffer-cursor-row ,b))
+            (,old-c (editor-buffer-cursor-col ,b)))
+       (when (and (eq (editor-buffer-helix-mode ,b) :select)
+                  (null (editor-buffer-selection-anchor-row ,b)))
+         (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+               (editor-buffer-selection-anchor-col ,b) ,old-c))
+       ,@body
+       (%clamp-cursor ,b)
+       (when (eq (editor-buffer-helix-mode ,b) :normal)
+         (if (or (/= (editor-buffer-cursor-row ,b) ,old-r)
+                 (/= (editor-buffer-cursor-col ,b) ,old-c))
+             (setf (editor-buffer-selection-anchor-row ,b) ,old-r
+                   (editor-buffer-selection-anchor-col ,b) ,old-c)
+             (setf (editor-buffer-selection-anchor-row ,b) nil
+                   (editor-buffer-selection-anchor-col ,b) nil))))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Helix Command Execution (:w, :q, :wq, :e, :scratch)
 ;;; ---------------------------------------------------------------------------
@@ -1010,29 +1055,30 @@
       (case cmd
         ;; Goto sub-mode: g g, g e, g h, g l, g s
         (:go
-         (cond
-           ((eq k #\g)
-            (setf (editor-buffer-cursor-row buf) 0
-                  (editor-buffer-cursor-col buf) 0))
-           ((eq k #\e)
-            (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf))))
-                  (editor-buffer-cursor-col buf) 0))
-           ((or (eq k #\h) (eq k #\b))
-            (setf (editor-buffer-cursor-col buf) 0))
-           ((eq k #\l)
-            (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf))))))
-           ((eq k #\s)
-            (let* ((cur (%current-line buf))
-                   (pos (position-if (lambda (c) (not (find c '(#\Space #\Tab)))) cur)))
-              (setf (editor-buffer-cursor-col buf) (or pos 0)))))
-         (%clamp-cursor buf)
+         (with-helix-motion (buf)
+           (cond
+             ((eq k #\g)
+              (setf (editor-buffer-cursor-row buf) 0
+                    (editor-buffer-cursor-col buf) 0))
+             ((eq k #\e)
+              (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf))))
+                    (editor-buffer-cursor-col buf) 0))
+             ((or (eq k #\h) (eq k #\b))
+              (setf (editor-buffer-cursor-col buf) 0))
+             ((eq k #\l)
+              (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf))))))
+             ((eq k #\s)
+              (let* ((cur (%current-line buf))
+                     (pos (position-if (lambda (c) (not (find c '(#\Space #\Tab)))) cur)))
+                (setf (editor-buffer-cursor-col buf) (or pos 0))))))
          (return-from buffer-handle-key t))
 
         ;; Match sub-mode: m m (jump bracket), m i (inside), m a (around)
         (:match
          (cond
            ((eq k #\m)
-            (%jump-matching-bracket buf))
+            (with-helix-motion (buf)
+              (%jump-matching-bracket buf)))
            ((eq k #\i)
             (setf (editor-buffer-pending-command buf) :match-inside
                   (editor-buffer-status-message buf) "[mi] w: word  \": quotes  ': quotes  (: parens")
@@ -1067,22 +1113,26 @@
 
         (:find-char-fwd
          (when (characterp k)
-           (%find-char buf k :forward t :till nil))
+           (with-helix-motion (buf)
+             (%find-char buf k :forward t :till nil)))
          (return-from buffer-handle-key t))
 
         (:till-char-fwd
          (when (characterp k)
-           (%find-char buf k :forward t :till t))
+           (with-helix-motion (buf)
+             (%find-char buf k :forward t :till t)))
          (return-from buffer-handle-key t))
 
         (:find-char-bwd
          (when (characterp k)
-           (%find-char buf k :forward nil :till nil))
+           (with-helix-motion (buf)
+             (%find-char buf k :forward nil :till nil)))
          (return-from buffer-handle-key t))
 
         (:till-char-bwd
          (when (characterp k)
-           (%find-char buf k :forward nil :till t))
+           (with-helix-motion (buf)
+             (%find-char buf k :forward nil :till t)))
          (return-from buffer-handle-key t))
 
         (:replace-char
@@ -1121,43 +1171,61 @@
     (:normal
      (let ((k (if (characterp (or char key)) (or char key) key)))
        (cond
+         ;; Escape: collapse selection if active
+         ((or (eq key :escape) (eq char #\Esc))
+          (when (editor-buffer-selection-anchor-row buf)
+            (%collapse-selection buf)))
+
          ;; Space Leader Key
          ((or (eq k #\Space) (eq k :space))
           (setf (editor-buffer-leader-active-p buf) t
                 (editor-buffer-status-message buf) "[SPC] f: file  b: buffer  w: save  q: quit  s: scratch"))
 
          ;; Motions: h, j, k, l / Arrows
+         ;; In Normal mode: single-step motions cancel any active selection and move cursor
          ((or (eq k #\h) (eq k :left))
+          (setf (editor-buffer-selection-anchor-row buf) nil
+                (editor-buffer-selection-anchor-col buf) nil)
           (decf (editor-buffer-cursor-col buf))
           (%clamp-cursor buf))
          ((or (eq k #\l) (eq k :right))
+          (setf (editor-buffer-selection-anchor-row buf) nil
+                (editor-buffer-selection-anchor-col buf) nil)
           (incf (editor-buffer-cursor-col buf))
           (%clamp-cursor buf))
          ((or (eq k #\j) (eq k :down))
+          (setf (editor-buffer-selection-anchor-row buf) nil
+                (editor-buffer-selection-anchor-col buf) nil)
           (incf (editor-buffer-cursor-row buf))
           (%clamp-cursor buf))
          ((or (eq k #\k) (eq k :up))
+          (setf (editor-buffer-selection-anchor-row buf) nil
+                (editor-buffer-selection-anchor-col buf) nil)
           (decf (editor-buffer-cursor-row buf))
           (%clamp-cursor buf))
 
-         ;; Word motions: w, b, e
-         ((eq k #\w) (%move-next-word buf))
-         ((eq k #\b) (%move-prev-word buf))
-         ((eq k #\e) (%move-end-word buf) (%clamp-cursor buf))
+         ;; Word motions: w, b, e (transient motion selection in normal mode)
+         ((eq k #\w)
+          (with-helix-motion (buf) (%move-next-word buf)))
+         ((eq k #\b)
+          (with-helix-motion (buf) (%move-prev-word buf)))
+         ((eq k #\e)
+          (with-helix-motion (buf) (%move-end-word buf)))
 
          ;; Line Navigation: 0, $
          ((or (eq k #\0) (eq k :home))
-          (setf (editor-buffer-cursor-col buf) 0))
+          (with-helix-motion (buf) (setf (editor-buffer-cursor-col buf) 0)))
          ((or (eq k #\$) (eq k :end))
-          (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf))))))
+          (with-helix-motion (buf) (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf)))))))
 
          ;; Menus: g (goto), m (match)
          ((eq k #\g)
           (setf (editor-buffer-pending-command buf) :go
                 (editor-buffer-status-message buf) "[g] g: top  e: end  h: start  l: end  s: non-blank"))
          ((eq k #\G)
-          (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf))))
-                (editor-buffer-cursor-col buf) 0))
+          (with-helix-motion (buf)
+            (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf))))
+                  (editor-buffer-cursor-col buf) 0)))
          ((eq k #\m)
           (setf (editor-buffer-pending-command buf) :match
                 (editor-buffer-status-message buf) "[m] m: match bracket  i: inside  a: around"))
@@ -1188,9 +1256,10 @@
 
          ;; Enter Visual Select Mode: v
          ((eq k #\v)
+          (unless (editor-buffer-selection-anchor-row buf)
+            (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
+                  (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
           (setf (editor-buffer-helix-mode buf) :select
-                (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
-                (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)
                 (editor-buffer-status-message buf) "[Select mode]"))
 
          ;; Undo / Redo: u, U
@@ -1249,9 +1318,14 @@
     (:select
      (let ((k (if (characterp (or char key)) (or char key) key)))
        (cond
-         ;; Escape, 'v', or ';' collapses selection and returns to normal mode
-         ((or (eq key :escape) (eq char #\Esc) (eq k #\v) (eq k #\;))
+         ;; Escape or ';' collapses selection and returns to normal mode
+         ((or (eq key :escape) (eq char #\Esc) (eq k #\;))
           (%collapse-selection buf))
+
+         ;; 'v' toggles select mode off, returning to normal mode while keeping selection
+         ((eq k #\v)
+          (setf (editor-buffer-helix-mode buf) :normal
+                (editor-buffer-status-message buf) "[Normal mode]"))
 
          ;; Space Leader in selection mode
          ((or (eq k #\Space) (eq k :space))
@@ -1265,19 +1339,31 @@
 
          ;; Motions extend selection (anchor stays fixed)
          ((or (eq k #\h) (eq k :left))
+          (unless (editor-buffer-selection-anchor-row buf)
+            (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
+                  (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
           (decf (editor-buffer-cursor-col buf)) (%clamp-cursor buf))
          ((or (eq k #\l) (eq k :right))
+          (unless (editor-buffer-selection-anchor-row buf)
+            (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
+                  (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
           (incf (editor-buffer-cursor-col buf)) (%clamp-cursor buf))
          ((or (eq k #\j) (eq k :down))
+          (unless (editor-buffer-selection-anchor-row buf)
+            (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
+                  (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
           (incf (editor-buffer-cursor-row buf)) (%clamp-cursor buf))
          ((or (eq k #\k) (eq k :up))
+          (unless (editor-buffer-selection-anchor-row buf)
+            (setf (editor-buffer-selection-anchor-row buf) (editor-buffer-cursor-row buf)
+                  (editor-buffer-selection-anchor-col buf) (editor-buffer-cursor-col buf)))
           (decf (editor-buffer-cursor-row buf)) (%clamp-cursor buf))
-         ((eq k #\w) (%move-next-word buf))
-         ((eq k #\b) (%move-prev-word buf))
-         ((eq k #\e) (%move-end-word buf) (%clamp-cursor buf))
-         ((or (eq k #\0) (eq k :home)) (setf (editor-buffer-cursor-col buf) 0))
-         ((or (eq k #\$) (eq k :end)) (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf))))))
-         ((eq k #\G) (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf)))) (editor-buffer-cursor-col buf) 0))
+         ((eq k #\w) (with-helix-motion (buf) (%move-next-word buf)))
+         ((eq k #\b) (with-helix-motion (buf) (%move-prev-word buf)))
+         ((eq k #\e) (with-helix-motion (buf) (%move-end-word buf)))
+         ((or (eq k #\0) (eq k :home)) (with-helix-motion (buf) (setf (editor-buffer-cursor-col buf) 0)))
+         ((or (eq k #\$) (eq k :end)) (with-helix-motion (buf) (setf (editor-buffer-cursor-col buf) (max 0 (1- (length (%current-line buf)))))))
+         ((eq k #\G) (with-helix-motion (buf) (setf (editor-buffer-cursor-row buf) (max 0 (1- (length (editor-buffer-lines buf)))) (editor-buffer-cursor-col buf) 0)))
 
          ;; Sub-modes in selection mode
          ((eq k #\g)
